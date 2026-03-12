@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-dbops-pvc-new
+  labels:
+    app: postgres-dbops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-dbops-config
+  labels:
+    app: postgres-dbops
+data:
+  POSTGRES_DB: "mydatabase"
+  POSTGRES_USER: "user"
+  POSTGRES_PASSWORD: "password"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-dbops
+  labels:
+    app: postgres-dbops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-dbops
+  template:
+    metadata:
+      labels:
+        app: postgres-dbops
+    spec:
+      containers:
+      - name: postgres-dbops
+        image: postgres:14
+        envFrom:
+        - configMapRef:
+            name: postgres-dbops-config
+        env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata    
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: postgres-dbops-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"            
+      volumes:
+      - name: postgres-dbops-storage
+        persistentVolumeClaim:
+          claimName: postgres-dbops-pvc-new
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-dbops
+  labels:
+    app: postgres-dbops
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+  selector:
+    app: postgres-dbops
+  type: LoadBalancer

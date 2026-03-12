@@ -1,0 +1,194 @@
+---
+# ── Namespace ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+
+---
+# ── Secrets ───────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bbq-db-secret
+  namespace: default
+type: Opaque
+stringData:
+  db-init-user: "user"
+  db-init-pass: "password"
+  db-user:      "user"
+  db-password:  "password"
+
+---
+# ── Postgres Deployment ───────────────────────────────────────────────────────
+# NOTE: Using pre-existing PVC: postgres-dbops-pvc-new (pvc-12da733b-f49a-4d46-848d-551d55a38610)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: default
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  strategy:
+    type: Recreate          # needed when using a RWO PVC
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-init-user
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-init-pass
+        - name: POSTGRES_DB
+          value: "postgres"   # maintenance DB; app DB created by the Go app
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "user"]
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "user"]
+          initialDelaySeconds: 5
+          periodSeconds: 3
+        volumeMounts:
+        - name: pgdata
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: pgdata
+        persistentVolumeClaim:
+          claimName: postgres-dbops-pvc-new   # pre-existing PVC (pvc-12da733b-f49a-4d46-848d-551d55a38610)
+
+---
+# ── BBQBookkeeper App Deployment ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bbqbookeeper-web
+  namespace: default
+  labels:
+    app: bbqinventoryapp
+spec:
+  replicas: 3
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app: bbqinventoryapp
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        app: bbqinventoryapp
+    spec:
+      containers:
+      # ── load generator sidecar ─────────────────────────────────────────────
+      - name: load-generator
+        image: curlimages/curl:7.85.0
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            while true; do
+              curl -s localhost:8080/inventory-by-location?location=Seattle > /dev/null
+              sleep 0.05
+            done
+
+      # ── main app ──────────────────────────────────────────────────────────
+      - name: bbqinventoryapp
+        image: YOUR_REGISTRY/bbqbookkeeper:latest   # ← replace after docker push
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        env:
+        - name: DB_INIT_USER
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-init-user
+        - name: DB_INIT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-init-pass
+        - name: DB_SERVER
+          value: "postgres-dbops"    # Kubernetes Service name
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-user
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-password
+        - name: DB_NAME
+          value: "mydatabase"   # app DB created by the Go app
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 3
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "64Mi"
+          limits:
+            cpu: "250m"
+            memory: "128Mi"
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+---
+# ── App Service ───────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: bbqbookkeeper-web
+  namespace: default
+  labels:
+    app: bbqinventoryapp
+spec:
+  type: LoadBalancer
+  selector:
+    app: bbqinventoryapp
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30001
