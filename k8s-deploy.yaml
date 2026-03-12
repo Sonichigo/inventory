@@ -117,7 +117,7 @@ spec:
 
       # ── main app ──────────────────────────────────────────────────────────
       - name: bbqinventoryapp
-        image: YOUR_REGISTRY/bbqbookkeeper:latest   # ← replace after docker push
+        image: ghcr.io/sonichigo/bbqbookkeeper:latest   # ← replace after docker push
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
