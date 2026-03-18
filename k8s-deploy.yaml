@@ -114,6 +114,13 @@ spec:
               curl -s localhost:8080/inventory-by-location?location=Seattle > /dev/null
               sleep 0.05
             done
+        resources:
+          requests:
+            cpu: "50m"      # curl is lightweight, keep it cheap
+            memory: "32Mi"
+          limits:
+            cpu: "100m"     # cap it so it can't steal from the app
+            memory: "64Mi"
 
       # ── main app ──────────────────────────────────────────────────────────
       - name: bbqinventoryapp
