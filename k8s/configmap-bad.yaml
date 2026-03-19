@@ -1,3 +1,7 @@
+# ── ConfigMap: BAD performance state ──────────────────────────────────────────
+# No index on location — forces sequential scan at 60 req/sec
+# Apply: kubectl apply -f k8s/configmap-bad.yaml
+#        kubectl rollout restart deployment/bbqbookeeper-web -n default
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -5,11 +9,16 @@ metadata:
   namespace: default
 data:
   schema.sql: |
+    -- ── schema.sql ────────────────────────────────────────────────────────────────
+    -- Creates tables only. Safe to run against both fresh and existing databases.
+    -- NO unique constraint here — owned by seed.sql to handle schema drift.
+    
     CREATE TABLE IF NOT EXISTS locations (
         id   SERIAL PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
         city TEXT NOT NULL
     );
+    
     CREATE TABLE IF NOT EXISTS inventory (
         id       SERIAL PRIMARY KEY,
         name     TEXT    NOT NULL,
@@ -17,19 +26,46 @@ data:
         unit     TEXT    NOT NULL DEFAULT 'lbs',
         location TEXT    NOT NULL REFERENCES locations(name) ON UPDATE CASCADE
     );
+    
+    INSERT INTO locations (name, city) VALUES
+        ('Seattle',       'Seattle'),
+        ('Portland',      'Portland'),
+        ('San Francisco', 'San Francisco'),
+        ('Austin',        'Austin'),
+        ('Nashville',     'Nashville'),
+        ('Chicago',       'Chicago'),
+        ('Dallas',        'Dallas'),
+        ('Miami',         'Miami'),
+        ('Denver',        'Denver'),
+        ('Phoenix',       'Phoenix')
+    ON CONFLICT (name) DO NOTHING;
+
+  seed-bad.sql: |
+    -- ── seed-bad.sql ──────────────────────────────────────────────────────────────
+    -- BAD performance state for DBMarlin demo.
+    -- Order of operations:
+    --   1. Truncate tables (clean slate — prevents duplicate constraint errors)
+    --   2. Re-seed locations
+    --   3. Drop/re-add unique constraint
+    --   4. Drop fix index if present from previous good deployment
+    --   5. Insert inventory (no index → sequential scan on every query)
+    
+    TRUNCATE TABLE inventory;
+    TRUNCATE TABLE locations CASCADE;
+    
     INSERT INTO locations (name, city) VALUES
         ('Seattle','Seattle'),('Portland','Portland'),
         ('San Francisco','San Francisco'),('Austin','Austin'),
         ('Nashville','Nashville'),('Chicago','Chicago'),
         ('Dallas','Dallas'),('Miami','Miami'),
-        ('Denver','Denver'),('Phoenix','Phoenix')
-    ON CONFLICT (name) DO NOTHING;
-
-  seed.sql: |
-    -- BAD STATE: no index → sequential scan on every query
+        ('Denver','Denver'),('Phoenix','Phoenix');
+    
     ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_name_location_key;
     ALTER TABLE inventory ADD CONSTRAINT inventory_name_location_key UNIQUE (name, location);
+    
+    -- BAD: no index — forces sequential scan on LOWER(location) = LOWER($1)
     DROP INDEX IF EXISTS idx_inventory_location_lower;
+    
     INSERT INTO inventory (name, quantity, unit, location) VALUES
         ('Brisket',50,'lbs','Seattle'),('Pulled Pork',30,'lbs','Seattle'),
         ('Baby Back Ribs',20,'racks','Seattle'),('Sausage Links',60,'links','Seattle'),
@@ -57,5 +93,4 @@ data:
         ('Brisket',50,'lbs','Denver'),('Pulled Pork',26,'lbs','Denver'),
         ('Baby Back Ribs',20,'racks','Denver'),('Smoked Turkey',14,'lbs','Denver'),
         ('Brisket',44,'lbs','Phoenix'),('Pulled Pork',24,'lbs','Phoenix'),
-        ('Jalapeño Sausage',38,'links','Phoenix'),('Chicken Wings',88,'pieces','Phoenix')
-    ON CONFLICT ON CONSTRAINT inventory_name_location_key DO NOTHING;
+        ('Jalapeño Sausage',38,'links','Phoenix'),('Chicken Wings',88,'pieces','Phoenix');

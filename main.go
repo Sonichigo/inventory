@@ -19,6 +19,10 @@ func buildConfig() Config {
 	if sqlDir == "" {
 		sqlDir = "./sql"
 	}
+	seedFile := os.Getenv("SEED_FILE")
+	if seedFile == "" {
+		seedFile = "seed-bad.sql" // local dev default
+	}
 	return Config{
 		InitUser: "user",
 		InitPass: "password",
@@ -28,13 +32,14 @@ func buildConfig() Config {
 		Password: "password",
 		DBName:   "mydatabase",
 		SQLDir:   sqlDir,
+		SeedFile: seedFile,
 	}
 }
 
 func main() {
 	cfg := buildConfig()
-	log.Printf("Connecting to Postgres at %s:%s db=%s sqlDir=%s",
-		cfg.Server, cfg.Port, cfg.DBName, cfg.SQLDir)
+	log.Printf("Connecting to Postgres at %s:%s db=%s seed=%s",
+		cfg.Server, cfg.Port, cfg.DBName, cfg.SeedFile)
 
 	database, err := NewDB(cfg)
 	if err != nil {
@@ -45,9 +50,7 @@ func main() {
 	h := NewHandler(database)
 	h.RegisterRoutes(mux)
 
-	// Serve demo UI at /ui/
 	mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.Dir("./ui"))))
-	// Redirect root to UI
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.Redirect(w, r, "/ui/", http.StatusFound)

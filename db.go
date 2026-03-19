@@ -19,6 +19,7 @@ type Config struct {
 	Password string
 	DBName   string
 	SQLDir   string
+	SeedFile string
 }
 
 type DB struct {
@@ -86,8 +87,8 @@ func NewDB(cfg Config) (*DB, error) {
 	if err := database.runSQLFile(cfg.SQLDir + "/schema.sql"); err != nil {
 		return nil, fmt.Errorf("schema.sql failed: %w", err)
 	}
-	if err := database.runSQLFile(cfg.SQLDir + "/seed.sql"); err != nil {
-		return nil, fmt.Errorf("seed.sql failed: %w", err)
+	if err := database.runSQLFile(cfg.SQLDir + "/" + cfg.SeedFile); err != nil {
+		return nil, fmt.Errorf("%s failed: %w", cfg.SeedFile, err)
 	}
 
 	if _, err := appConn.Exec(fmt.Sprintf(
@@ -98,7 +99,7 @@ func NewDB(cfg Config) (*DB, error) {
 		return nil, fmt.Errorf("granting table privileges: %w", err)
 	}
 
-	log.Printf("Database initialised from %s/seed.sql", cfg.SQLDir)
+	log.Printf("Database initialised from %s/%s", cfg.SQLDir, cfg.SeedFile)
 	return database, nil
 }
 
