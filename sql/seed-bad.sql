@@ -1,17 +1,23 @@
 -- ── seed-bad.sql ──────────────────────────────────────────────────────────────
--- BAD performance state:
+-- BAD performance state for DBMarlin demo.
+--
+-- Constraint is explicitly managed here (not in schema.sql) to handle
+-- schema drift — the table may already exist from a previous deployment
+-- without the constraint, so we drop and re-add it unconditionally.
+--
+-- What makes this "bad":
 --   1. No index on inventory.location
 --   2. Query uses LOWER(location) = LOWER($1) — prevents any index use
---   3. Large dataset amplifies the sequential scan cost
---
--- At 60 req/sec this creates measurable wait time visible in DBMarlin.
--- To demonstrate the problem, apply this configmap and restart the deployment.
+--   3. Forces full sequential scan on every /inventory-by-location request
+--   4. At 60 req/sec across 3 replicas → measurable DB wait time in DBMarlin
 
--- Drop the index if it exists from a previous "fix" demo
-DROP INDEX IF EXISTS idx_inventory_location;
+-- Ensure constraint exists regardless of prior table state
+ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_name_location_key;
+ALTER TABLE inventory ADD CONSTRAINT inventory_name_location_key UNIQUE (name, location);
+
+-- Drop the fix index if it exists from a previous "good" deployment
 DROP INDEX IF EXISTS idx_inventory_location_lower;
 
--- Seed inventory across all locations
 INSERT INTO inventory (name, quantity, unit, location) VALUES
     ('Brisket',           50,  'lbs',    'Seattle'),
     ('Pulled Pork',       30,  'lbs',    'Seattle'),
@@ -64,4 +70,4 @@ INSERT INTO inventory (name, quantity, unit, location) VALUES
     ('Pulled Pork',       24,  'lbs',    'Phoenix'),
     ('Jalapeño Sausage',  38,  'links',  'Phoenix'),
     ('Chicken Wings',     88,  'pieces', 'Phoenix')
-ON CONFLICT (name, location) DO NOTHING;
+ON CONFLICT ON CONSTRAINT inventory_name_location_key DO NOTHING;

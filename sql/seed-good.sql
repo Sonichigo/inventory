@@ -1,15 +1,20 @@
 -- ── seed-good.sql ─────────────────────────────────────────────────────────────
--- GOOD performance state (the fix):
---   1. Functional index on LOWER(location) so the query can use it
---   2. Same dataset as seed-bad.sql — proves the index is what fixed it
+-- GOOD performance state — the fix for DBMarlin demo.
 --
--- Apply this configmap and restart the deployment to show DBMarlin recovery.
+-- Same constraint management pattern as seed-bad.sql for consistency.
+--
+-- What makes this "good":
+--   Functional index on LOWER(location) means Postgres uses an index scan
+--   instead of a sequential scan for the hot query — avg time drops to sub-ms.
 
--- The fix: a functional index that matches the LOWER(location) query pattern
+-- Ensure constraint exists regardless of prior table state
+ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_name_location_key;
+ALTER TABLE inventory ADD CONSTRAINT inventory_name_location_key UNIQUE (name, location);
+
+-- THE FIX: functional index matching the LOWER(location) query pattern
 CREATE INDEX IF NOT EXISTS idx_inventory_location_lower
     ON inventory (LOWER(location));
 
--- Same seed data as bad — data itself is not the problem, the missing index is
 INSERT INTO inventory (name, quantity, unit, location) VALUES
     ('Brisket',           50,  'lbs',    'Seattle'),
     ('Pulled Pork',       30,  'lbs',    'Seattle'),
@@ -62,4 +67,4 @@ INSERT INTO inventory (name, quantity, unit, location) VALUES
     ('Pulled Pork',       24,  'lbs',    'Phoenix'),
     ('Jalapeño Sausage',  38,  'links',  'Phoenix'),
     ('Chicken Wings',     88,  'pieces', 'Phoenix')
-ON CONFLICT (name, location) DO NOTHING;
+ON CONFLICT ON CONSTRAINT inventory_name_location_key DO NOTHING;

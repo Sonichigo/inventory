@@ -1,7 +1,3 @@
-# ── ConfigMap: GOOD performance state (the fix) ───────────────────────────────
-# Adds functional index on LOWER(location) — query now uses index scan.
-# Apply with: kubectl apply -f configmap-good.yaml
-#             kubectl rollout restart deployment/bbqbookeeper-web -n default
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,8 +15,7 @@ data:
         name     TEXT    NOT NULL,
         quantity INTEGER NOT NULL DEFAULT 0,
         unit     TEXT    NOT NULL DEFAULT 'lbs',
-        location TEXT    NOT NULL REFERENCES locations(name) ON UPDATE CASCADE,
-        UNIQUE(name, location)
+        location TEXT    NOT NULL REFERENCES locations(name) ON UPDATE CASCADE
     );
     INSERT INTO locations (name, city) VALUES
         ('Seattle','Seattle'),('Portland','Portland'),
@@ -31,9 +26,10 @@ data:
     ON CONFLICT (name) DO NOTHING;
 
   seed.sql: |
-    -- GOOD STATE: functional index added — LOWER(location) query uses index scan
-    CREATE INDEX IF NOT EXISTS idx_inventory_location_lower
-        ON inventory (LOWER(location));
+    -- GOOD STATE: functional index added → index scan replaces sequential scan
+    ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_name_location_key;
+    ALTER TABLE inventory ADD CONSTRAINT inventory_name_location_key UNIQUE (name, location);
+    CREATE INDEX IF NOT EXISTS idx_inventory_location_lower ON inventory (LOWER(location));
     INSERT INTO inventory (name, quantity, unit, location) VALUES
         ('Brisket',50,'lbs','Seattle'),('Pulled Pork',30,'lbs','Seattle'),
         ('Baby Back Ribs',20,'racks','Seattle'),('Sausage Links',60,'links','Seattle'),
@@ -62,4 +58,4 @@ data:
         ('Baby Back Ribs',20,'racks','Denver'),('Smoked Turkey',14,'lbs','Denver'),
         ('Brisket',44,'lbs','Phoenix'),('Pulled Pork',24,'lbs','Phoenix'),
         ('Jalapeño Sausage',38,'links','Phoenix'),('Chicken Wings',88,'pieces','Phoenix')
-    ON CONFLICT (name, location) DO NOTHING;
+    ON CONFLICT ON CONSTRAINT inventory_name_location_key DO NOTHING;
