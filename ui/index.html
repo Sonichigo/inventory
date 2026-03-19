@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BBQBookkeeper — DBMarlin Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f0f0f;
+      color: #f0f0f0;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1a1a;
+      border-bottom: 2px solid #e85d04;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    header .logo { font-size: 28px; }
+
+    header h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    header .subtitle {
+      font-size: 12px;
+      color: #888;
+      margin-top: 2px;
+    }
+
+    header .badge {
+      margin-left: auto;
+      background: #e85d04;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 20px;
+      letter-spacing: 0.5px;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+
+    .controls {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .controls h2 {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      margin-bottom: 20px;
+    }
+
+    .control-row {
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 12px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    select {
+      background: #0f0f0f;
+      border: 1px solid #333;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      min-width: 180px;
+      cursor: pointer;
+      outline: none;
+    }
+
+    select:focus { border-color: #e85d04; }
+
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-primary {
+      background: #e85d04;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #f47a2a; }
+    .btn-primary:disabled { background: #555; cursor: not-allowed; }
+
+    .btn-blast {
+      background: #1a1a1a;
+      color: #e85d04;
+      border: 1px solid #e85d04;
+    }
+    .btn-blast.active {
+      background: #e85d04;
+      color: #fff;
+      animation: pulse 1.5s infinite;
+    }
+    .btn-blast:hover { background: #2a1a0a; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.8; }
+    }
+
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+
+    .stat-card .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #666;
+      margin-bottom: 6px;
+    }
+
+    .stat-card .value {
+      font-size: 28px;
+      font-weight: 700;
+      color: #e85d04;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-card .unit {
+      font-size: 13px;
+      color: #555;
+      margin-left: 4px;
+    }
+
+    .results {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .results-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid #2a2a2a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .results-header h2 {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+    }
+
+    .results-header .location-tag {
+      background: #2a2a2a;
+      color: #e85d04;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead th {
+      background: #111;
+      padding: 10px 24px;
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #555;
+      border-bottom: 1px solid #2a2a2a;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid #1e1e1e;
+      transition: background 0.1s;
+    }
+
+    tbody tr:hover { background: #222; }
+    tbody tr:last-child { border-bottom: none; }
+
+    tbody td {
+      padding: 12px 24px;
+      font-size: 14px;
+      color: #ddd;
+    }
+
+    tbody td.name { font-weight: 500; color: #fff; }
+
+    tbody td.qty {
+      font-variant-numeric: tabular-nums;
+      color: #e85d04;
+      font-weight: 600;
+    }
+
+    .empty {
+      padding: 48px 24px;
+      text-align: center;
+      color: #444;
+      font-size: 14px;
+    }
+
+    .loading {
+      padding: 48px 24px;
+      text-align: center;
+      color: #666;
+      font-size: 14px;
+    }
+
+    .error-msg {
+      padding: 16px 24px;
+      color: #ff6b6b;
+      font-size: 13px;
+      background: #2a1010;
+      border-top: 1px solid #3a1010;
+    }
+
+    .log {
+      margin-top: 24px;
+      background: #0a0a0a;
+      border: 1px solid #1a1a1a;
+      border-radius: 10px;
+      padding: 16px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: #555;
+      height: 120px;
+      overflow-y: auto;
+    }
+
+    .log .entry { margin-bottom: 3px; }
+    .log .entry .ts { color: #333; margin-right: 8px; }
+    .log .entry .ok { color: #4ade80; }
+    .log .entry .err { color: #f87171; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🔥</div>
+  <div>
+    <h1>BBQBookkeeper</h1>
+    <div class="subtitle">Database load driver for DBMarlin demo</div>
+  </div>
+  <div class="badge">DEMO MODE</div>
+</header>
+
+<div class="container">
+
+  <div class="controls">
+    <h2>Query Driver</h2>
+    <div class="control-row">
+      <div class="field">
+        <label>Location</label>
+        <select id="locationSelect">
+          <option value="">Loading...</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="btn btn-primary" id="queryBtn" onclick="runQuery()">
+          Run Query
+        </button>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="btn btn-blast" id="blastBtn" onclick="toggleBlast()">
+          ⚡ Auto Blast
+        </button>
+      </div>
+      <div class="field">
+        <label>Interval</label>
+        <select id="intervalSelect">
+          <option value="50">50ms (~20/s)</option>
+          <option value="100">100ms (~10/s)</option>
+          <option value="200">200ms (~5/s)</option>
+          <option value="500">500ms (~2/s)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="label">Queries Fired</div>
+      <div class="value" id="statCount">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Last Response</div>
+      <div class="value" id="statMs">—<span class="unit">ms</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Rows Returned</div>
+      <div class="value" id="statRows">—</div>
+    </div>
+  </div>
+
+  <div class="results">
+    <div class="results-header">
+      <h2>Inventory Results</h2>
+      <span class="location-tag" id="locationTag">—</span>
+    </div>
+    <div id="tableArea">
+      <div class="empty">Select a location and run a query</div>
+    </div>
+  </div>
+
+  <div class="log" id="logArea"></div>
+
+</div>
+
+<script>
+  let blastInterval = null;
+  let queryCount = 0;
+
+  async function loadLocations() {
+    try {
+      const res = await fetch('/locations');
+      const locs = await res.json();
+      const sel = document.getElementById('locationSelect');
+      sel.innerHTML = locs.map(l =>
+        `<option value="${l.name}">${l.name}</option>`
+      ).join('');
+    } catch(e) {
+      document.getElementById('locationSelect').innerHTML =
+        '<option value="Seattle">Seattle</option>';
+    }
+  }
+
+  async function runQuery() {
+    const location = document.getElementById('locationSelect').value;
+    if (!location) return;
+
+    const start = performance.now();
+    try {
+      const res = await fetch(`/inventory-by-location?location=${encodeURIComponent(location)}`);
+      const elapsed = Math.round(performance.now() - start);
+      const items = await res.json();
+
+      queryCount++;
+      document.getElementById('statCount').textContent = queryCount;
+      document.getElementById('statMs').innerHTML = `${elapsed}<span class="unit">ms</span>`;
+      document.getElementById('statRows').textContent = items.length;
+      document.getElementById('locationTag').textContent = location;
+
+      renderTable(items);
+      appendLog(`GET /inventory-by-location?location=${location} → ${items.length} rows (${elapsed}ms)`, 'ok');
+    } catch(e) {
+      appendLog(`Error: ${e.message}`, 'err');
+    }
+  }
+
+  function renderTable(items) {
+    const area = document.getElementById('tableArea');
+    if (!items || items.length === 0) {
+      area.innerHTML = '<div class="empty">No inventory found for this location</div>';
+      return;
+    }
+    area.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Item</th>
+            <th>Quantity</th>
+            <th>Unit</th>
+            <th>Location</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map(i => `
+            <tr>
+              <td>${i.id}</td>
+              <td class="name">${i.name}</td>
+              <td class="qty">${i.quantity}</td>
+              <td>${i.unit}</td>
+              <td>${i.location}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  function toggleBlast() {
+    const btn = document.getElementById('blastBtn');
+    if (blastInterval) {
+      clearInterval(blastInterval);
+      blastInterval = null;
+      btn.textContent = '⚡ Auto Blast';
+      btn.classList.remove('active');
+    } else {
+      const ms = parseInt(document.getElementById('intervalSelect').value);
+      blastInterval = setInterval(runQuery, ms);
+      btn.textContent = '⏹ Stop Blast';
+      btn.classList.add('active');
+      runQuery();
+    }
+  }
+
+  function appendLog(msg, type) {
+    const log = document.getElementById('logArea');
+    const ts = new Date().toTimeString().slice(0, 8);
+    const div = document.createElement('div');
+    div.className = 'entry';
+    div.innerHTML = `<span class="ts">${ts}</span><span class="${type}">${msg}</span>`;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+    // keep log capped at 100 entries
+    while (log.children.length > 100) log.removeChild(log.firstChild);
+  }
+
+  loadLocations();
+</script>
+</body>
+</html>

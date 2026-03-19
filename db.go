@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -17,6 +18,7 @@ type Config struct {
 	User     string
 	Password string
 	DBName   string
+	SQLDir   string
 }
 
 type DB struct {
@@ -24,7 +26,6 @@ type DB struct {
 }
 
 func NewDB(cfg Config) (*DB, error) {
-	// ── Step 1: connect as admin to postgres maintenance DB ───────────────────
 	adminDSN := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable",
 		cfg.Server, cfg.Port, cfg.InitUser, cfg.InitPass,
@@ -35,48 +36,39 @@ func NewDB(cfg Config) (*DB, error) {
 	}
 	defer adminConn.Close()
 
-	// ── Step 2: create app database if not exists ─────────────────────────────
 	var dbExists bool
-	err = adminConn.QueryRow(
+	if err = adminConn.QueryRow(
 		"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", cfg.DBName,
-	).Scan(&dbExists)
-	if err != nil {
-		return nil, fmt.Errorf("checking database existence: %w", err)
+	).Scan(&dbExists); err != nil {
+		return nil, fmt.Errorf("checking database: %w", err)
 	}
 	if !dbExists {
 		log.Printf("Creating database %q", cfg.DBName)
-		_, err = adminConn.Exec(fmt.Sprintf(`CREATE DATABASE "%s"`, cfg.DBName))
-		if err != nil {
+		if _, err = adminConn.Exec(fmt.Sprintf(`CREATE DATABASE "%s"`, cfg.DBName)); err != nil {
 			return nil, fmt.Errorf("creating database: %w", err)
 		}
 	}
 
-	// ── Step 3: create app role if not exists ─────────────────────────────────
 	var roleExists bool
-	err = adminConn.QueryRow(
+	if err = adminConn.QueryRow(
 		"SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)", cfg.User,
-	).Scan(&roleExists)
-	if err != nil {
-		return nil, fmt.Errorf("checking role existence: %w", err)
+	).Scan(&roleExists); err != nil {
+		return nil, fmt.Errorf("checking role: %w", err)
 	}
 	if !roleExists {
 		log.Printf("Creating role %q", cfg.User)
-		_, err = adminConn.Exec(
-			fmt.Sprintf(`CREATE ROLE "%s" LOGIN PASSWORD '%s'`, cfg.User, cfg.Password),
-		)
-		if err != nil {
+		if _, err = adminConn.Exec(fmt.Sprintf(
+			`CREATE ROLE "%s" LOGIN PASSWORD '%s'`, cfg.User, cfg.Password,
+		)); err != nil {
 			return nil, fmt.Errorf("creating role: %w", err)
 		}
 	}
-
-	_, err = adminConn.Exec(
-		fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE "%s" TO "%s"`, cfg.DBName, cfg.User),
-	)
-	if err != nil {
+	if _, err = adminConn.Exec(fmt.Sprintf(
+		`GRANT ALL PRIVILEGES ON DATABASE "%s" TO "%s"`, cfg.DBName, cfg.User,
+	)); err != nil {
 		return nil, fmt.Errorf("granting privileges: %w", err)
 	}
 
-	// ── Step 4: reconnect as app user ─────────────────────────────────────────
 	appDSN := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		cfg.Server, cfg.Port, cfg.User, cfg.Password, cfg.DBName,
@@ -85,20 +77,39 @@ func NewDB(cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app connect failed: %w", err)
 	}
-
 	appConn.SetMaxOpenConns(25)
 	appConn.SetMaxIdleConns(5)
 	appConn.SetConnMaxLifetime(5 * time.Minute)
 
 	database := &DB{conn: appConn}
 
-	// ── Step 5: run schema migrations ─────────────────────────────────────────
-	if err := database.migrate(); err != nil {
-		return nil, fmt.Errorf("migration failed: %w", err)
+	if err := database.runSQLFile(cfg.SQLDir + "/schema.sql"); err != nil {
+		return nil, fmt.Errorf("schema.sql failed: %w", err)
+	}
+	if err := database.runSQLFile(cfg.SQLDir + "/seed.sql"); err != nil {
+		return nil, fmt.Errorf("seed.sql failed: %w", err)
 	}
 
-	log.Println("Database initialised successfully")
+	if _, err := appConn.Exec(fmt.Sprintf(
+		`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "%s";
+		 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "%s";`,
+		cfg.User, cfg.User,
+	)); err != nil {
+		return nil, fmt.Errorf("granting table privileges: %w", err)
+	}
+
+	log.Printf("Database initialised from %s/seed.sql", cfg.SQLDir)
 	return database, nil
+}
+
+func (d *DB) runSQLFile(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	log.Printf("Running SQL file: %s", path)
+	_, err = d.conn.Exec(string(content))
+	return err
 }
 
 func openWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, error) {
@@ -118,50 +129,7 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, erro
 	return nil, fmt.Errorf("could not connect after %d attempts: %w", attempts, err)
 }
 
-func (d *DB) migrate() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS locations (
-		id   SERIAL PRIMARY KEY,
-		name TEXT NOT NULL UNIQUE,
-		city TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS inventory (
-		id       SERIAL PRIMARY KEY,
-		name     TEXT    NOT NULL,
-		quantity INTEGER NOT NULL DEFAULT 0,
-		unit     TEXT    NOT NULL DEFAULT 'lbs',
-		location TEXT    NOT NULL REFERENCES locations(name) ON UPDATE CASCADE
-	);
-
-	INSERT INTO locations (name, city) VALUES
-		('Seattle',      'Seattle'),
-		('Portland',     'Portland'),
-		('San Francisco','San Francisco'),
-		('Austin',       'Austin'),
-		('Nashville',    'Nashville')
-	ON CONFLICT (name) DO NOTHING;
-
-	INSERT INTO inventory (name, quantity, unit, location) VALUES
-		('Brisket',          50,  'lbs',    'Seattle'),
-		('Pulled Pork',      30,  'lbs',    'Seattle'),
-		('Baby Back Ribs',   20,  'racks',  'Seattle'),
-		('Brisket',          40,  'lbs',    'Portland'),
-		('Sausage Links',    60,  'links',  'Portland'),
-		('Chicken Wings',   100,  'pieces', 'San Francisco'),
-		('Brisket',          45,  'lbs',    'Austin'),
-		('Jalapeño Sausage', 35,  'links',  'Austin'),
-		('Pulled Pork',      25,  'lbs',    'Nashville'),
-		('Smoked Turkey',    15,  'lbs',    'Nashville')
-	ON CONFLICT DO NOTHING;
-	`
-	_, err := d.conn.Exec(schema)
-	return err
-}
-
-func (d *DB) Ping() error {
-	return d.conn.Ping()
-}
+func (d *DB) Ping() error { return d.conn.Ping() }
 
 func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
 	rows, err := d.conn.Query(
@@ -175,7 +143,6 @@ func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
 	var items []InventoryItem
 	for rows.Next() {
 		var item InventoryItem
@@ -195,7 +162,6 @@ func (d *DB) GetAllInventory() ([]InventoryItem, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
 	var items []InventoryItem
 	for rows.Next() {
 		var item InventoryItem
@@ -215,19 +181,14 @@ func (d *DB) AddItem(req AddItemRequest) (*InventoryItem, error) {
 		 RETURNING id, name, quantity, location, unit`,
 		req.Name, req.Quantity, req.Location, req.Unit,
 	).Scan(&item.ID, &item.Name, &item.Quantity, &item.Location, &item.Unit)
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
+	return &item, err
 }
 
 func (d *DB) UpdateQuantity(req UpdateQuantityRequest) (*InventoryItem, error) {
 	var item InventoryItem
 	err := d.conn.QueryRow(
-		`UPDATE inventory
-		    SET quantity = $1
-		  WHERE id = $2
-		  RETURNING id, name, quantity, location, unit`,
+		`UPDATE inventory SET quantity=$1 WHERE id=$2
+		 RETURNING id, name, quantity, location, unit`,
 		req.Quantity, req.ID,
 	).Scan(&item.ID, &item.Name, &item.Quantity, &item.Location, &item.Unit)
 	if err == sql.ErrNoRows {
@@ -237,7 +198,7 @@ func (d *DB) UpdateQuantity(req UpdateQuantityRequest) (*InventoryItem, error) {
 }
 
 func (d *DB) DeleteItem(id int) error {
-	res, err := d.conn.Exec(`DELETE FROM inventory WHERE id = $1`, id)
+	res, err := d.conn.Exec(`DELETE FROM inventory WHERE id=$1`, id)
 	if err != nil {
 		return err
 	}
@@ -254,7 +215,6 @@ func (d *DB) GetLocations() ([]Location, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
 	var locs []Location
 	for rows.Next() {
 		var l Location

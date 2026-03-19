@@ -61,6 +61,53 @@ The app comes with a **built-in load generator sidecar** that hammers the `/inve
 
 ---
 
+## What DBMarlin Will Show
+
+| Metric | Bad state | Good state | 
+--- | --- | --- | 
+| Query plan |Sequential scan | Index scan | 
+| Avg query time |Several ms|Sub-ms| 
+| Total time |High|Drops significantly| 
+| Top statement |SELECT ... WHERE LOWER(location)|Same query, faster|
+
+- Top statements — the `/inventory-by-location` query dominates
+- Wait events — IO waits from sequential scans across all 3 replicas
+- Activity Comparison — before/after the ConfigMap swap shows the inflection point clearly
+
+## Project Structure
+
+```
+inventory/
+├── main.go             # Entrypoint — reads SQL_DIR and DB_SERVER env vars
+├── db.go               # Postgres bootstrap + runSQLFile() loader
+├── handlers.go         # HTTP route handlers
+├── models.go           # Shared structs
+├── go.mod / go.sum     # Go module
+├── Dockerfile          # Multi-stage build, embeds ui/ (~10MB final image)
+├── postgres.yaml       # Postgres PVC, Deployment, Service (deploy first)
+├── k8s-deploy.yaml     # App Deployment + Service (mounts ConfigMap as SQL_DIR)
+├── ui/
+│   └── index.html      # Demo query driver UI — served at /ui/
+├── sql/
+│   ├── schema.sql      # Table definitions — runs once on startup
+│   ├── seed-bad.sql    # No index → sequential scan (the problem)
+│   └── seed-good.sql   # Functional index added (the fix)
+└── k8s/
+    ├── configmap-bad.yaml   # Mounts schema.sql + seed-bad.sql
+    └── configmap-good.yaml  # Mounts schema.sql + seed-good.sql
+```
+
+## How the SQL ConfigMap works
+The app reads two SQL files at startup from the directory set by SQL_DIR (default: /etc/bbq-sql):
+
+- `schema.sql` — creates tables and seeds location data (idempotent, safe to re-run)
+- `seed-bad.sql` — the problematic seed data (no index)
+- `seed-good.sql` — the fixed seed data (with functional index)
+
+Swapping the ConfigMap and restarting the deployment is all it takes to flip between the degraded and fixed states — no Docker rebuild needed.
+
+---
+
 ## Files
 
 ```
@@ -88,7 +135,8 @@ docker run -d --name pg \
 **2. Run the app:**
 ```bash
 go mod tidy
-go run .
+go mod tidy
+SQL_DIR=./sql go run .
 ```
 
 **3. Test it:**
@@ -105,7 +153,7 @@ curl "http://localhost:8080/health"
 
 **Step 1 — Deploy Postgres:**
 ```bash
-kubectl apply -f postgres.yaml
+cd inventory && kubectl apply -f postgres.yaml
 ```
 
 **Step 2 — Wait for Postgres to be ready:**
@@ -129,47 +177,29 @@ docker push YOUR_REGISTRY/bbqbookkeeper:latest
 image: YOUR_REGISTRY/bbqbookkeeper:latest
 ```
 
-**Step 5 — Deploy the app:**
+**Step 5 — Apply the bad ConfigMap (starting state) and Deploy the app:**
 ```bash
+kubectl apply -f k8s/configmap-bad.yaml
 kubectl apply -f k8s-deploy.yaml
-```
-
-**Step 6 — Watch it come up:**
-```bash
 kubectl rollout status deployment/bbqbookeeper-web -n default
-kubectl get pods -n default
 ```
 
-**Step 7 — Get the external IP and test:**
+- Open the UI and enable Auto Blast
+- Switch to DBMarlin — watch executions climb, average time increase
+- Show the `seed-bad.sql` file — point out no index, `LOWER()` wrapping
+
+**Step 6 — Get the external IP and test:**
 ```bash
 kubectl get svc bbqbookkeeper-web -n default
-curl "http://<EXTERNAL-IP>:8080/inventory-by-location?location=Austin"
-curl "http://<EXTERNAL-IP>:8080/health"
+# Open http://<EXTERNAL-IP>:8080/ui/ in your browser to access the demo UI
 ```
 
----
-
-## What DBMarlin Will Show
-
-Once deployed, DBMarlin will immediately start picking up load from the sidecar's continuous requests. You can use this to demonstrate:
-
-- **Query frequency** — the `/inventory-by-location` query fires ~20 times/second per pod (60/sec across 3 replicas)
-- **Slow query detection** — add more data or remove indexes to simulate degradation
-- **Wait events** — connection pool pressure from 3 replicas hitting one Postgres pod
-- **Before/after comparison** — DBMarlin's time-comparison view shows the impact of adding an index or tuning a query
-
----
-
-## Project Structure
-
+**Step 7 — Swap to the good ConfigMap to fix the issue:**
+```bash
+kubectl apply -f k8s/configmap-good.yaml
+kubectl rollout restart deployment/bbqbookeeper-web -n default
 ```
-inventory/
-├── main.go         # Entrypoint, hardcoded config
-├── db.go           # Postgres init, migrations, all queries
-├── handlers.go     # HTTP route handlers
-├── models.go       # Shared structs
-├── go.mod          # Go module
-├── Dockerfile      # Multi-stage build (~8MB final image)
-├── postgres.yaml   # Postgres PVC, ConfigMap, Deployment, Service
-└── k8s-deploy.yaml # BBQBookkeeper app Deployment + Service
-```
+
+- Stay on DBMarlin — watch average time drop as pods roll over
+- Show the `seed-good.sql` file — point out `CREATE INDEX ... ON inventory (LOWER(location))`
+- Use DBMarlin's Activity Comparison view to show before vs after side by side

@@ -1,12 +1,4 @@
 ---
-# ── Namespace ─────────────────────────────────────────────────────────────────
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: default
-
----
-# ── Secrets ───────────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Secret
 metadata:
@@ -20,8 +12,6 @@ stringData:
   db-password:  "password"
 
 ---
-# ── BBQBookkeeper App Deployment ──────────────────────────────────────────────
-# Postgres is deployed separately via postgres.yaml (Service: postgres-dbops:5432)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -47,8 +37,7 @@ spec:
         app: bbqinventoryapp
     spec:
       containers:
-      # ── load generator sidecar ────────────────────────────────────────────
-      # Fires ~20 req/sec per pod → ~60 req/sec total across 3 replicas
+      # ── load generator sidecar ───────────────────────────────────────────
       - name: load-generator
         image: curlimages/curl:7.85.0
         command: ["/bin/sh", "-c"]
@@ -66,14 +55,17 @@ spec:
             cpu: "50m"
             memory: "64Mi"
 
-      # ── main app ──────────────────────────────────────────────────────────
+      # ── main app ─────────────────────────────────────────────────────────
       - name: bbqinventoryapp
         image: ghcr.io/sonichigo/bbqbookkeeper:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
-          protocol: TCP
         env:
+        - name: DB_SERVER
+          value: "postgres-dbops"
+        - name: SQL_DIR
+          value: "/etc/bbq-sql"          # mounted from ConfigMap
         - name: DB_INIT_USER
           valueFrom:
             secretKeyRef:
@@ -84,10 +76,6 @@ spec:
             secretKeyRef:
               name: bbq-db-secret
               key: db-init-pass
-        - name: DB_SERVER
-          value: "postgres-dbops"   # existing Service from postgres.yaml
-        - name: DB_PORT
-          value: "5432"
         - name: DB_USER
           valueFrom:
             secretKeyRef:
@@ -98,8 +86,10 @@ spec:
             secretKeyRef:
               name: bbq-db-secret
               key: db-password
-        - name: DB_NAME
-          value: "mydatabase"
+        volumeMounts:
+        - name: sql-config
+          mountPath: /etc/bbq-sql        # schema.sql + seed.sql land here
+          readOnly: true
         livenessProbe:
           httpGet:
             path: /health
@@ -120,14 +110,17 @@ spec:
           limits:
             cpu: "150m"
             memory: "128Mi"
-        terminationMessagePath: /dev/termination-log
-        terminationMessagePolicy: File
+
+      volumes:
+      - name: sql-config
+        configMap:
+          name: bbq-sql                  # swap configmap-bad ↔ configmap-good
+
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 30
 
 ---
-# ── App Service ───────────────────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
