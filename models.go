@@ -6,12 +6,22 @@ type InventoryItem struct {
 	Quantity int    `json:"quantity"`
 	Location string `json:"location"`
 	Unit     string `json:"unit"`
+	Supplier string `json:"supplier,omitempty"`
+	LeadDays int    `json:"lead_days,omitempty"`
 }
 
 type Location struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 	City string `json:"city"`
+}
+
+type Supplier struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Location string `json:"location"`
+	Item     string `json:"item"`
+	LeadDays int    `json:"lead_days"`
 }
 
 type AddItemRequest struct {

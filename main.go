@@ -1,7 +1,3 @@
-// ── Hardcoded config ──────────────────────────────────────────────────────────
-// Dev  → DB_SERVER defaults to "localhost"
-// Prod → set DB_SERVER=postgres (K8s Service name) to override
-
 package main
 
 import (
@@ -19,10 +15,6 @@ func buildConfig() Config {
 	if sqlDir == "" {
 		sqlDir = "./sql"
 	}
-	seedFile := os.Getenv("SEED_FILE")
-	if seedFile == "" {
-		seedFile = "seed-bad.sql" // local dev default
-	}
 	return Config{
 		InitUser: "user",
 		InitPass: "password",
@@ -32,14 +24,13 @@ func buildConfig() Config {
 		Password: "password",
 		DBName:   "mydatabase",
 		SQLDir:   sqlDir,
-		SeedFile: seedFile,
 	}
 }
 
 func main() {
 	cfg := buildConfig()
-	log.Printf("Connecting to Postgres at %s:%s db=%s seed=%s",
-		cfg.Server, cfg.Port, cfg.DBName, cfg.SeedFile)
+	log.Printf("Connecting to Postgres at %s:%s db=%s sqlDir=%s",
+		cfg.Server, cfg.Port, cfg.DBName, cfg.SQLDir)
 
 	database, err := NewDB(cfg)
 	if err != nil {

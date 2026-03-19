@@ -1,70 +1,112 @@
 -- ── seed-good.sql ─────────────────────────────────────────────────────────────
 -- GOOD performance state — the fix for DBMarlin demo.
---
--- Same constraint management pattern as seed-bad.sql for consistency.
---
--- What makes this "good":
---   Functional index on LOWER(location) means Postgres uses an index scan
---   instead of a sequential scan for the hot query — avg time drops to sub-ms.
+-- Same data, same join query — functional indexes make it fast.
 
--- Ensure constraint exists regardless of prior table state
+TRUNCATE TABLE inventory;
+TRUNCATE TABLE suppliers;
+TRUNCATE TABLE locations CASCADE;
+
+INSERT INTO locations (name, city) VALUES
+    ('Seattle','Seattle'),('Portland','Portland'),
+    ('San Francisco','San Francisco'),('Austin','Austin'),
+    ('Nashville','Nashville'),('Chicago','Chicago'),
+    ('Dallas','Dallas'),('Miami','Miami'),
+    ('Denver','Denver'),('Phoenix','Phoenix');
+
 ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_name_location_key;
-ALTER TABLE inventory ADD CONSTRAINT inventory_name_location_key UNIQUE (name, location);
+ALTER TABLE suppliers DROP CONSTRAINT IF EXISTS suppliers_name_location_key;
 
--- THE FIX: functional index matching the LOWER(location) query pattern
-CREATE INDEX IF NOT EXISTS idx_inventory_location_lower
-    ON inventory (LOWER(location));
+-- THE FIX: functional indexes on all join columns
+-- inventory side
+DROP INDEX IF EXISTS idx_inventory_location_lower;
+CREATE INDEX idx_inventory_location_lower ON inventory (LOWER(location));
 
+-- suppliers side
+DROP INDEX IF EXISTS idx_suppliers_location_lower;
+DROP INDEX IF EXISTS idx_suppliers_item_lower;
+CREATE INDEX idx_suppliers_location_lower ON suppliers (LOWER(location));
+CREATE INDEX idx_suppliers_item_lower ON suppliers (LOWER(item));
+
+-- Known inventory rows
 INSERT INTO inventory (name, quantity, unit, location) VALUES
-    ('Brisket',           50,  'lbs',    'Seattle'),
-    ('Pulled Pork',       30,  'lbs',    'Seattle'),
-    ('Baby Back Ribs',    20,  'racks',  'Seattle'),
-    ('Sausage Links',     60,  'links',  'Seattle'),
-    ('Chicken Wings',    100,  'pieces', 'Seattle'),
-    ('Smoked Turkey',     15,  'lbs',    'Seattle'),
-    ('Burnt Ends',        25,  'lbs',    'Seattle'),
-    ('Pork Belly',        18,  'lbs',    'Seattle'),
-    ('Brisket',           40,  'lbs',    'Portland'),
-    ('Sausage Links',     60,  'links',  'Portland'),
-    ('Pulled Pork',       35,  'lbs',    'Portland'),
-    ('Baby Back Ribs',    22,  'racks',  'Portland'),
-    ('Chicken Wings',     80,  'pieces', 'Portland'),
-    ('Smoked Salmon',     12,  'lbs',    'Portland'),
-    ('Brisket',           45,  'lbs',    'Austin'),
-    ('Jalapeño Sausage',  35,  'links',  'Austin'),
-    ('Pulled Pork',       28,  'lbs',    'Austin'),
-    ('Beef Ribs',         16,  'racks',  'Austin'),
-    ('Chicken Wings',     90,  'pieces', 'Austin'),
-    ('Smoked Turkey',     20,  'lbs',    'Austin'),
-    ('Pulled Pork',       25,  'lbs',    'Nashville'),
-    ('Smoked Turkey',     15,  'lbs',    'Nashville'),
-    ('Baby Back Ribs',    18,  'racks',  'Nashville'),
-    ('Brisket',           38,  'lbs',    'Nashville'),
-    ('Hot Chicken',       50,  'pieces', 'Nashville'),
-    ('Chicken Wings',    100,  'pieces', 'San Francisco'),
-    ('Pulled Pork',       20,  'lbs',    'San Francisco'),
-    ('Brisket',           30,  'lbs',    'San Francisco'),
-    ('Sausage Links',     40,  'links',  'San Francisco'),
-    ('Brisket',           55,  'lbs',    'Chicago'),
-    ('Italian Sausage',   70,  'links',  'Chicago'),
-    ('Pulled Pork',       32,  'lbs',    'Chicago'),
-    ('Baby Back Ribs',    24,  'racks',  'Chicago'),
-    ('Chicken Wings',     95,  'pieces', 'Chicago'),
-    ('Brisket',           48,  'lbs',    'Dallas'),
-    ('Jalapeño Sausage',  40,  'links',  'Dallas'),
-    ('Beef Ribs',         20,  'racks',  'Dallas'),
-    ('Pulled Pork',       30,  'lbs',    'Dallas'),
-    ('Chicken Wings',     85,  'pieces', 'Dallas'),
-    ('Brisket',           42,  'lbs',    'Miami'),
-    ('Pulled Pork',       28,  'lbs',    'Miami'),
-    ('Chicken Wings',     75,  'pieces', 'Miami'),
-    ('Smoked Turkey',     18,  'lbs',    'Miami'),
-    ('Brisket',           50,  'lbs',    'Denver'),
-    ('Pulled Pork',       26,  'lbs',    'Denver'),
-    ('Baby Back Ribs',    20,  'racks',  'Denver'),
-    ('Smoked Turkey',     14,  'lbs',    'Denver'),
-    ('Brisket',           44,  'lbs',    'Phoenix'),
-    ('Pulled Pork',       24,  'lbs',    'Phoenix'),
-    ('Jalapeño Sausage',  38,  'links',  'Phoenix'),
-    ('Chicken Wings',     88,  'pieces', 'Phoenix')
-ON CONFLICT ON CONSTRAINT inventory_name_location_key DO NOTHING;
+    ('Brisket',50,'lbs','Seattle'),('Pulled Pork',30,'lbs','Seattle'),
+    ('Baby Back Ribs',20,'racks','Seattle'),('Sausage Links',60,'links','Seattle'),
+    ('Chicken Wings',100,'pieces','Seattle'),('Smoked Turkey',15,'lbs','Seattle'),
+    ('Burnt Ends',25,'lbs','Seattle'),('Pork Belly',18,'lbs','Seattle'),
+    ('Brisket',40,'lbs','Portland'),('Sausage Links',60,'links','Portland'),
+    ('Pulled Pork',35,'lbs','Portland'),('Baby Back Ribs',22,'racks','Portland'),
+    ('Chicken Wings',80,'pieces','Portland'),('Smoked Salmon',12,'lbs','Portland'),
+    ('Brisket',45,'lbs','Austin'),('Jalapeño Sausage',35,'links','Austin'),
+    ('Pulled Pork',28,'lbs','Austin'),('Beef Ribs',16,'racks','Austin'),
+    ('Chicken Wings',90,'pieces','Austin'),('Smoked Turkey',20,'lbs','Austin'),
+    ('Pulled Pork',25,'lbs','Nashville'),('Smoked Turkey',15,'lbs','Nashville'),
+    ('Baby Back Ribs',18,'racks','Nashville'),('Brisket',38,'lbs','Nashville'),
+    ('Hot Chicken',50,'pieces','Nashville'),
+    ('Chicken Wings',100,'pieces','San Francisco'),('Pulled Pork',20,'lbs','San Francisco'),
+    ('Brisket',30,'lbs','San Francisco'),('Sausage Links',40,'links','San Francisco'),
+    ('Brisket',55,'lbs','Chicago'),('Italian Sausage',70,'links','Chicago'),
+    ('Pulled Pork',32,'lbs','Chicago'),('Baby Back Ribs',24,'racks','Chicago'),
+    ('Chicken Wings',95,'pieces','Chicago'),
+    ('Brisket',48,'lbs','Dallas'),('Jalapeño Sausage',40,'links','Dallas'),
+    ('Beef Ribs',20,'racks','Dallas'),('Pulled Pork',30,'lbs','Dallas'),
+    ('Chicken Wings',85,'pieces','Dallas'),
+    ('Brisket',42,'lbs','Miami'),('Pulled Pork',28,'lbs','Miami'),
+    ('Chicken Wings',75,'pieces','Miami'),('Smoked Turkey',18,'lbs','Miami'),
+    ('Brisket',50,'lbs','Denver'),('Pulled Pork',26,'lbs','Denver'),
+    ('Baby Back Ribs',20,'racks','Denver'),('Smoked Turkey',14,'lbs','Denver'),
+    ('Brisket',44,'lbs','Phoenix'),('Pulled Pork',24,'lbs','Phoenix'),
+    ('Jalapeño Sausage',38,'links','Phoenix'),('Chicken Wings',88,'pieces','Phoenix');
+
+-- Bulk insert 50,000 random inventory rows (identical to bad state)
+INSERT INTO inventory (name, quantity, unit, location)
+SELECT
+    (ARRAY['Brisket','Pulled Pork','Chicken Wings','Beef Ribs','Sausage Links',
+           'Smoked Turkey','Burnt Ends','Pork Belly','Hot Chicken','Jalapeño Sausage'])
+        [floor(random()*10+1)],
+    floor(random()*100+1)::int,
+    (ARRAY['lbs','racks','links','pieces'])
+        [floor(random()*4+1)],
+    (ARRAY['Seattle','Portland','Austin','Nashville','San Francisco',
+           'Chicago','Dallas','Miami','Denver','Phoenix'])
+        [floor(random()*10+1)]
+FROM generate_series(1, 50000);
+
+-- Known supplier rows
+INSERT INTO suppliers (name, location, item, lead_days) VALUES
+    ('Pacific Meats Co','Seattle','Brisket',3),
+    ('Pacific Meats Co','Seattle','Pulled Pork',2),
+    ('Pacific Meats Co','Seattle','Baby Back Ribs',4),
+    ('Northwest Smoke','Seattle','Sausage Links',1),
+    ('Northwest Smoke','Seattle','Chicken Wings',1),
+    ('Cascade Farms','Portland','Brisket',3),
+    ('Cascade Farms','Portland','Pulled Pork',2),
+    ('Willamette Meats','Portland','Smoked Salmon',5),
+    ('Texas Prime','Austin','Brisket',2),
+    ('Texas Prime','Austin','Jalapeño Sausage',1),
+    ('Texas Prime','Austin','Beef Ribs',3),
+    ('Lone Star Supply','Dallas','Brisket',2),
+    ('Lone Star Supply','Dallas','Beef Ribs',3),
+    ('Music City Meats','Nashville','Pulled Pork',2),
+    ('Music City Meats','Nashville','Hot Chicken',1),
+    ('Bay Area Foods','San Francisco','Chicken Wings',2),
+    ('Windy City Meats','Chicago','Brisket',3),
+    ('Windy City Meats','Chicago','Italian Sausage',1),
+    ('Miami Meats','Miami','Brisket',4),
+    ('Rocky Mountain Supply','Denver','Brisket',3),
+    ('Desert Supply Co','Phoenix','Jalapeño Sausage',2);
+
+-- Bulk insert 50,000 random supplier rows (identical to bad state)
+INSERT INTO suppliers (name, location, item, lead_days)
+SELECT
+    (ARRAY['Pacific Meats Co','Cascade Farms','Texas Prime','Lone Star Supply',
+           'Music City Meats','Bay Area Foods','Windy City Meats','Miami Meats',
+           'Rocky Mountain Supply','Desert Supply Co'])
+        [floor(random()*10+1)],
+    (ARRAY['Seattle','Portland','Austin','Nashville','San Francisco',
+           'Chicago','Dallas','Miami','Denver','Phoenix'])
+        [floor(random()*10+1)],
+    (ARRAY['Brisket','Pulled Pork','Chicken Wings','Beef Ribs','Sausage Links',
+           'Smoked Turkey','Burnt Ends','Pork Belly','Hot Chicken','Jalapeño Sausage'])
+        [floor(random()*10+1)],
+    floor(random()*7+1)::int
+FROM generate_series(1, 50000);

@@ -27,6 +27,7 @@ type DB struct {
 }
 
 func NewDB(cfg Config) (*DB, error) {
+	// ── Step 1: connect as admin ───────────────────────────────────────────────
 	adminDSN := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable",
 		cfg.Server, cfg.Port, cfg.InitUser, cfg.InitPass,
@@ -37,6 +38,7 @@ func NewDB(cfg Config) (*DB, error) {
 	}
 	defer adminConn.Close()
 
+	// ── Step 2: create app database if not exists ──────────────────────────────
 	var dbExists bool
 	if err = adminConn.QueryRow(
 		"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)", cfg.DBName,
@@ -50,6 +52,7 @@ func NewDB(cfg Config) (*DB, error) {
 		}
 	}
 
+	// ── Step 3: create app role if not exists ─────────────────────────────────
 	var roleExists bool
 	if err = adminConn.QueryRow(
 		"SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)", cfg.User,
@@ -70,6 +73,7 @@ func NewDB(cfg Config) (*DB, error) {
 		return nil, fmt.Errorf("granting privileges: %w", err)
 	}
 
+	// ── Step 4: connect as app user ───────────────────────────────────────────
 	appDSN := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		cfg.Server, cfg.Port, cfg.User, cfg.Password, cfg.DBName,
@@ -84,13 +88,27 @@ func NewDB(cfg Config) (*DB, error) {
 
 	database := &DB{conn: appConn}
 
+	// ── Step 5: run schema.sql ─────────────────────────────────────────────────
 	if err := database.runSQLFile(cfg.SQLDir + "/schema.sql"); err != nil {
 		return nil, fmt.Errorf("schema.sql failed: %w", err)
 	}
-	if err := database.runSQLFile(cfg.SQLDir + "/" + cfg.SeedFile); err != nil {
-		return nil, fmt.Errorf("%s failed: %w", cfg.SeedFile, err)
+
+	// ── Step 6: auto-detect seed file ─────────────────────────────────────────
+	// If seed-good.sql exists in the mounted dir → good state (index fix applied)
+	// Otherwise fall back to seed-bad.sql → bad state (sequential scan)
+	// This means the ConfigMap swap alone drives the state — no env var needed.
+	seedFile := cfg.SQLDir + "/seed-bad.sql"
+	if _, err := os.Stat(cfg.SQLDir + "/seed-good.sql"); err == nil {
+		seedFile = cfg.SQLDir + "/seed-good.sql"
+		log.Println("Detected seed-good.sql — running in GOOD performance state")
+	} else {
+		log.Println("Detected seed-bad.sql — running in BAD performance state (no indexes)")
+	}
+	if err := database.runSQLFile(seedFile); err != nil {
+		return nil, fmt.Errorf("%s failed: %w", seedFile, err)
 	}
 
+	// ── Step 7: grant table privileges ────────────────────────────────────────
 	if _, err := appConn.Exec(fmt.Sprintf(
 		`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "%s";
 		 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "%s";`,
@@ -99,7 +117,7 @@ func NewDB(cfg Config) (*DB, error) {
 		return nil, fmt.Errorf("granting table privileges: %w", err)
 	}
 
-	log.Printf("Database initialised from %s/%s", cfg.SQLDir, cfg.SeedFile)
+	log.Printf("Database initialised from %s", seedFile)
 	return database, nil
 }
 
@@ -132,22 +150,35 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, erro
 
 func (d *DB) Ping() error { return d.conn.Ping() }
 
+// GetInventoryByLocation joins inventory against suppliers on LOWER() columns.
+// BAD state: no indexes → sequential scan on both tables + hash join
+// GOOD state: functional indexes on both tables → index scans, sub-ms
 func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, name, quantity, location, unit
-		   FROM inventory
-		  WHERE LOWER(location) = LOWER($1)
-		  ORDER BY name`,
+		`SELECT i.id, i.name, i.quantity, i.location, i.unit,
+		        COALESCE(s.name, ''),
+		        COALESCE(s.lead_days, 0)
+		   FROM inventory i
+		   LEFT JOIN suppliers s
+		          ON LOWER(s.location) = LOWER(i.location)
+		         AND LOWER(s.item)     = LOWER(i.name)
+		  WHERE LOWER(i.location) = LOWER($1)
+		  ORDER BY i.name`,
 		location,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	var items []InventoryItem
 	for rows.Next() {
 		var item InventoryItem
-		if err := rows.Scan(&item.ID, &item.Name, &item.Quantity, &item.Location, &item.Unit); err != nil {
+		if err := rows.Scan(
+			&item.ID, &item.Name, &item.Quantity,
+			&item.Location, &item.Unit,
+			&item.Supplier, &item.LeadDays,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -163,6 +194,7 @@ func (d *DB) GetAllInventory() ([]InventoryItem, error) {
 		return nil, err
 	}
 	defer rows.Close()
+
 	var items []InventoryItem
 	for rows.Next() {
 		var item InventoryItem
@@ -216,6 +248,7 @@ func (d *DB) GetLocations() ([]Location, error) {
 		return nil, err
 	}
 	defer rows.Close()
+
 	var locs []Location
 	for rows.Next() {
 		var l Location

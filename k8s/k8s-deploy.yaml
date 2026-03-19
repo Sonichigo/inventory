@@ -66,8 +66,6 @@ spec:
           value: "postgres-dbops"
         - name: SQL_DIR
           value: "/etc/bbq-sql"
-        - name: SEED_FILE
-          value: "seed-bad.sql"    # swap to seed-good.sql for the fix pipeline
         - name: DB_INIT_USER
           valueFrom:
             secretKeyRef:

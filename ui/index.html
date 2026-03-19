@@ -414,6 +414,8 @@
             <th>Quantity</th>
             <th>Unit</th>
             <th>Location</th>
+            <th>Supplier</th>
+            <th>Lead Days</th>
           </tr>
         </thead>
         <tbody>
@@ -424,6 +426,8 @@
               <td class="qty">${i.quantity}</td>
               <td>${i.unit}</td>
               <td>${i.location}</td>
+              <td>${i.supplier || '—'}</td>
+              <td>${i.lead_days || '—'}</td>
             </tr>
           `).join('')}
         </tbody>
