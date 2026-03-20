@@ -22,7 +22,11 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
-      onFail: MARK_RAN
+      preConditions:
+        - onFail: MARK_RAN
+          not:
+            tableExists:
+              tableName: locations
       changes:
         - createTable:
             tableName: locations
@@ -50,7 +54,11 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
-      onFail: MARK_RAN
+      preConditions:
+        - onFail: MARK_RAN
+          not:
+            tableExists:
+              tableName: inventory
       changes:
         - createTable:
             tableName: inventory
@@ -91,7 +99,11 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
-      onFail: MARK_RAN
+      preConditions:
+        - onFail: MARK_RAN
+          not:
+            tableExists:
+              tableName: suppliers
       changes:
         - createTable:
             tableName: suppliers
