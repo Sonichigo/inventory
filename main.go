@@ -11,10 +11,6 @@ func buildConfig() Config {
 	if server == "" {
 		server = "localhost"
 	}
-	sqlDir := os.Getenv("SQL_DIR")
-	if sqlDir == "" {
-		sqlDir = "./sql"
-	}
 	return Config{
 		InitUser: "user",
 		InitPass: "password",
@@ -23,14 +19,12 @@ func buildConfig() Config {
 		User:     "user",
 		Password: "password",
 		DBName:   "mydatabase",
-		SQLDir:   sqlDir,
 	}
 }
 
 func main() {
 	cfg := buildConfig()
-	log.Printf("Connecting to Postgres at %s:%s db=%s sqlDir=%s",
-		cfg.Server, cfg.Port, cfg.DBName, cfg.SQLDir)
+	log.Printf("Connecting to Postgres at %s:%s db=%s", cfg.Server, cfg.Port, cfg.DBName)
 
 	database, err := NewDB(cfg)
 	if err != nil {

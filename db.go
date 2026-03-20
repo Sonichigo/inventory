@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -18,8 +17,6 @@ type Config struct {
 	User     string
 	Password string
 	DBName   string
-	SQLDir   string
-	SeedFile string
 }
 
 type DB struct {
@@ -86,49 +83,8 @@ func NewDB(cfg Config) (*DB, error) {
 	appConn.SetMaxIdleConns(5)
 	appConn.SetConnMaxLifetime(5 * time.Minute)
 
-	database := &DB{conn: appConn}
-
-	// ── Step 5: run schema.sql ─────────────────────────────────────────────────
-	if err := database.runSQLFile(cfg.SQLDir + "/schema.sql"); err != nil {
-		return nil, fmt.Errorf("schema.sql failed: %w", err)
-	}
-
-	// ── Step 6: auto-detect seed file ─────────────────────────────────────────
-	// If seed-good.sql exists in the mounted dir → good state (index fix applied)
-	// Otherwise fall back to seed-bad.sql → bad state (sequential scan)
-	// This means the ConfigMap swap alone drives the state — no env var needed.
-	seedFile := cfg.SQLDir + "/seed-bad.sql"
-	if _, err := os.Stat(cfg.SQLDir + "/seed-good.sql"); err == nil {
-		seedFile = cfg.SQLDir + "/seed-good.sql"
-		log.Println("Detected seed-good.sql — running in GOOD performance state")
-	} else {
-		log.Println("Detected seed-bad.sql — running in BAD performance state (no indexes)")
-	}
-	if err := database.runSQLFile(seedFile); err != nil {
-		return nil, fmt.Errorf("%s failed: %w", seedFile, err)
-	}
-
-	// ── Step 7: grant table privileges ────────────────────────────────────────
-	if _, err := appConn.Exec(fmt.Sprintf(
-		`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "%s";
-		 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "%s";`,
-		cfg.User, cfg.User,
-	)); err != nil {
-		return nil, fmt.Errorf("granting table privileges: %w", err)
-	}
-
-	log.Printf("Database initialised from %s", seedFile)
-	return database, nil
-}
-
-func (d *DB) runSQLFile(path string) error {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", path, err)
-	}
-	log.Printf("Running SQL file: %s", path)
-	_, err = d.conn.Exec(string(content))
-	return err
+	log.Println("Database connected — schema managed by Liquibase")
+	return &DB{conn: appConn}, nil
 }
 
 func openWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, error) {
@@ -151,8 +107,8 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, erro
 func (d *DB) Ping() error { return d.conn.Ping() }
 
 // GetInventoryByLocation joins inventory against suppliers on LOWER() columns.
-// BAD state: no indexes → sequential scan on both tables + hash join
-// GOOD state: functional indexes on both tables → index scans, sub-ms
+// BAD state:  no indexes → sequential scan on both tables + hash join
+// GOOD state: functional indexes on all join columns → index scans, sub-ms
 func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
 	rows, err := d.conn.Query(
 		`SELECT i.id, i.name, i.quantity, i.location, i.unit,

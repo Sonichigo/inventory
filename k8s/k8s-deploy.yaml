@@ -57,15 +57,13 @@ spec:
 
       # ── main app ─────────────────────────────────────────────────────────
       - name: bbqinventoryapp
-        image: ghcr.io/sonichigo/bbqbookkeeper:latest
+        image: ghcr.io/sonichigo/bbqbookkeeper:demo
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
         env:
         - name: DB_SERVER
           value: "postgres-dbops"
-        - name: SQL_DIR
-          value: "/etc/bbq-sql"
         - name: DB_INIT_USER
           valueFrom:
             secretKeyRef:
@@ -86,10 +84,6 @@ spec:
             secretKeyRef:
               name: bbq-db-secret
               key: db-password
-        volumeMounts:
-        - name: sql-config
-          mountPath: /etc/bbq-sql        # schema.sql + seed.sql land here
-          readOnly: true
         livenessProbe:
           httpGet:
             path: /health
@@ -110,12 +104,6 @@ spec:
           limits:
             cpu: "150m"
             memory: "128Mi"
-
-      volumes:
-      - name: sql-config
-        configMap:
-          name: bbq-sql                  # swap configmap-bad ↔ configmap-good
-
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 30
