@@ -1,3 +1,4 @@
+# ── changelog-master.yaml ─────────────────────────────────────────────────────
 # Single master changelog for BBQBookkeeper DBMarlin demo.
 #
 # Context tags:
@@ -21,6 +22,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
+      onFail: MARK_RAN
       changes:
         - createTable:
             tableName: locations
@@ -48,6 +50,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
+      onFail: MARK_RAN
       changes:
         - createTable:
             tableName: inventory
@@ -88,6 +91,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
+      onFail: MARK_RAN
       changes:
         - createTable:
             tableName: suppliers
