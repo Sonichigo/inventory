@@ -300,6 +300,16 @@
     <h2>Query Driver</h2>
     <div class="control-row">
       <div class="field">
+        <label>Query Type</label>
+        <select id="queryType" onchange="toggleLocation()">
+          <option value="inventory-by-location">Inventory by Location</option>
+          <option value="supplier-summary">Supplier Summary</option>
+          <option value="low-stock">Low Stock</option>
+          <option value="inventory">All Inventory</option>
+          <option value="locations">Locations</option>
+        </select>
+      </div>
+      <div class="field" id="locationField">
         <label>Location</label>
         <select id="locationSelect">
           <option value="">Loading...</option>
@@ -376,24 +386,60 @@
     }
   }
 
+  function toggleLocation() {
+    const qt = document.getElementById('queryType').value;
+    const needs = ['inventory-by-location','supplier-summary'];
+    document.getElementById('locationField').style.display =
+      needs.includes(qt) ? '' : 'none';
+  }
+
   async function runQuery() {
+    const qt = document.getElementById('queryType').value;
     const location = document.getElementById('locationSelect').value;
-    if (!location) return;
+
+    let url, label;
+    switch(qt) {
+      case 'inventory-by-location':
+        if (!location) return;
+        url = `/inventory-by-location?location=${encodeURIComponent(location)}`;
+        label = `GET /inventory-by-location?location=${location}`;
+        break;
+      case 'supplier-summary':
+        if (!location) return;
+        url = `/supplier-summary?location=${encodeURIComponent(location)}`;
+        label = `GET /supplier-summary?location=${location}`;
+        break;
+      case 'low-stock':
+        url = `/inventory/low-stock?threshold=20`;
+        label = `GET /inventory/low-stock`;
+        break;
+      case 'inventory':
+        url = `/inventory`;
+        label = `GET /inventory`;
+        break;
+      case 'locations':
+        url = `/locations`;
+        label = `GET /locations`;
+        break;
+      default:
+        return;
+    }
 
     const start = performance.now();
     try {
-      const res = await fetch(`/inventory-by-location?location=${encodeURIComponent(location)}`);
+      const res = await fetch(url);
       const elapsed = Math.round(performance.now() - start);
-      const items = await res.json();
+      const data = await res.json();
+      const items = Array.isArray(data) ? data : [data];
 
       queryCount++;
       document.getElementById('statCount').textContent = queryCount;
       document.getElementById('statMs').innerHTML = `${elapsed}<span class="unit">ms</span>`;
       document.getElementById('statRows').textContent = items.length;
-      document.getElementById('locationTag').textContent = location;
+      document.getElementById('locationTag').textContent = location || qt;
 
       renderTable(items);
-      appendLog(`GET /inventory-by-location?location=${location} → ${items.length} rows (${elapsed}ms)`, 'ok');
+      appendLog(`${label} → ${items.length} rows (${elapsed}ms)`, 'ok');
     } catch(e) {
       appendLog(`Error: ${e.message}`, 'err');
     }

@@ -21,7 +21,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/inventory-by-location", h.InventoryByLocation)
 	mux.HandleFunc("/inventory", h.Inventory)
 	mux.HandleFunc("/inventory/", h.InventoryByID)
+	mux.HandleFunc("/inventory/low-stock", h.LowStock)
 	mux.HandleFunc("/locations", h.Locations)
+	mux.HandleFunc("/supplier-summary", h.SupplierSummary)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -36,19 +38,21 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// GET /health
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	dbStatus := "ok"
 	if err := h.db.Ping(); err != nil {
 		dbStatus = "unavailable: " + err.Error()
 		writeJSON(w, http.StatusServiceUnavailable, HealthResponse{
-			Status:   "degraded",
-			Database: dbStatus,
+			Status: "degraded", Database: dbStatus,
 		})
 		return
 	}
 	writeJSON(w, http.StatusOK, HealthResponse{Status: "ok", Database: dbStatus})
 }
 
+// GET /inventory-by-location?location=Seattle
+// HOT query — JOIN inventory + suppliers on LOWER() cols, no indexes in bad state
 func (h *Handler) InventoryByLocation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -71,6 +75,8 @@ func (h *Handler) InventoryByLocation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+// GET /inventory        → all items
+// POST /inventory       → add item
 func (h *Handler) Inventory(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -111,14 +117,20 @@ func (h *Handler) Inventory(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// PUT /inventory/{id}   → update quantity
+// DELETE /inventory/{id} → remove item
 func (h *Handler) InventoryByID(w http.ResponseWriter, r *http.Request) {
+	// skip if routed to /inventory/low-stock
+	if strings.HasSuffix(r.URL.Path, "low-stock") {
+		h.LowStock(w, r)
+		return
+	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/inventory/"), "/")
 	id, err := strconv.Atoi(parts[0])
 	if err != nil || id <= 0 {
 		writeError(w, http.StatusBadRequest, "invalid inventory id in path")
 		return
 	}
-
 	switch r.Method {
 	case http.MethodPut:
 		var req UpdateQuantityRequest
@@ -156,6 +168,32 @@ func (h *Handler) InventoryByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GET /inventory/low-stock?threshold=20
+// Aggregation query — GROUP BY location, filtered by quantity threshold
+func (h *Handler) LowStock(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	threshold := 20
+	if t := r.URL.Query().Get("threshold"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil {
+			threshold = v
+		}
+	}
+	items, err := h.db.GetLowStock(threshold)
+	if err != nil {
+		log.Printf("GetLowStock error: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to fetch low stock")
+		return
+	}
+	if items == nil {
+		items = []InventoryItem{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// GET /locations
 func (h *Handler) Locations(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -171,4 +209,28 @@ func (h *Handler) Locations(w http.ResponseWriter, r *http.Request) {
 		locs = []Location{}
 	}
 	writeJSON(w, http.StatusOK, locs)
+}
+
+// GET /supplier-summary?location=Seattle
+// Aggregation — COUNT, AVG lead_days grouped by supplier, joined against inventory
+func (h *Handler) SupplierSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	location := strings.TrimSpace(r.URL.Query().Get("location"))
+	if location == "" {
+		writeError(w, http.StatusBadRequest, "location query parameter is required")
+		return
+	}
+	summary, err := h.db.GetSupplierSummary(location)
+	if err != nil {
+		log.Printf("GetSupplierSummary error: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to fetch supplier summary")
+		return
+	}
+	if summary == nil {
+		summary = []SupplierSummary{}
+	}
+	writeJSON(w, http.StatusOK, summary)
 }

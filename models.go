@@ -24,6 +24,21 @@ type Supplier struct {
 	LeadDays int    `json:"lead_days"`
 }
 
+type SupplierSummary struct {
+	Supplier    string  `json:"supplier"`
+	Location    string  `json:"location"`
+	ItemCount   int     `json:"item_count"`
+	AvgLeadDays float64 `json:"avg_lead_days"`
+	TotalStock  int     `json:"total_stock"`
+}
+
+type LowStockItem struct {
+	Location string `json:"location"`
+	Name     string `json:"name"`
+	Quantity int    `json:"quantity"`
+	Unit     string `json:"unit"`
+}
+
 type AddItemRequest struct {
 	Name     string `json:"name"`
 	Quantity int    `json:"quantity"`

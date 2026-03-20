@@ -215,3 +215,76 @@ func (d *DB) GetLocations() ([]Location, error) {
 	}
 	return locs, rows.Err()
 }
+
+// GetLowStock returns items below a quantity threshold across all locations.
+// Triggers a full sequential scan + filter in bad state.
+// In good state, index on location helps narrow the scan.
+func (d *DB) GetLowStock(threshold int) ([]InventoryItem, error) {
+	rows, err := d.conn.Query(
+		`SELECT i.id, i.name, i.quantity, i.location, i.unit,
+		        COALESCE(s.name, ''),
+		        COALESCE(s.lead_days, 0)
+		   FROM inventory i
+		   LEFT JOIN suppliers s
+		          ON LOWER(s.location) = LOWER(i.location)
+		         AND LOWER(s.item)     = LOWER(i.name)
+		  WHERE i.quantity < $1
+		  ORDER BY i.quantity ASC, i.location`,
+		threshold,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []InventoryItem
+	for rows.Next() {
+		var item InventoryItem
+		if err := rows.Scan(
+			&item.ID, &item.Name, &item.Quantity,
+			&item.Location, &item.Unit,
+			&item.Supplier, &item.LeadDays,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// GetSupplierSummary returns aggregated supplier stats for a location.
+// Involves GROUP BY + AVG + COUNT + JOIN — expensive without indexes.
+func (d *DB) GetSupplierSummary(location string) ([]SupplierSummary, error) {
+	rows, err := d.conn.Query(
+		`SELECT s.name,
+		        s.location,
+		        COUNT(DISTINCT i.name)    AS item_count,
+		        AVG(s.lead_days)          AS avg_lead_days,
+		        COALESCE(SUM(i.quantity), 0) AS total_stock
+		   FROM suppliers s
+		   LEFT JOIN inventory i
+		          ON LOWER(i.location) = LOWER(s.location)
+		         AND LOWER(i.name)     = LOWER(s.item)
+		  WHERE LOWER(s.location) = LOWER($1)
+		  GROUP BY s.name, s.location
+		  ORDER BY total_stock DESC`,
+		location,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []SupplierSummary
+	for rows.Next() {
+		var s SupplierSummary
+		if err := rows.Scan(
+			&s.Supplier, &s.Location,
+			&s.ItemCount, &s.AvgLeadDays, &s.TotalStock,
+		); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, s)
+	}
+	return summaries, rows.Err()
+}

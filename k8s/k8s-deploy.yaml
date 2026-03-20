@@ -43,9 +43,20 @@ spec:
         command: ["/bin/sh", "-c"]
         args:
           - |
+            LOCATIONS="Seattle Portland Austin Nashville Chicago Dallas Miami Denver Phoenix"
             while true; do
-              curl -s localhost:8080/inventory-by-location?location=Seattle > /dev/null
-              sleep 0.05
+              for loc in $LOCATIONS; do
+                curl -s "localhost:8080/inventory-by-location?location=$loc" > /dev/null
+                sleep 0.05
+                curl -s "localhost:8080/supplier-summary?location=$loc" > /dev/null
+                sleep 0.05
+              done
+              curl -s "localhost:8080/inventory/low-stock?threshold=20" > /dev/null
+              sleep 0.1
+              curl -s "localhost:8080/inventory" > /dev/null
+              sleep 0.1
+              curl -s "localhost:8080/locations" > /dev/null
+              sleep 0.2
             done
         resources:
           requests:
@@ -57,7 +68,7 @@ spec:
 
       # ── main app ─────────────────────────────────────────────────────────
       - name: bbqinventoryapp
-        image: ghcr.io/sonichigo/bbqbookkeeper:demo
+        image: ghcr.io/sonichigo/bbqbookkeeper:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
