@@ -93,8 +93,8 @@ databaseChangeLog:
           tableExists:
             tableName: inventory
       changes:
-        - truncate:
-            tableName: inventory
+        - sql:
+            sql: TRUNCATE TABLE inventory;
 
   - changeSet:
       id: state-1b-truncate-suppliers
@@ -106,8 +106,8 @@ databaseChangeLog:
           tableExists:
             tableName: suppliers
       changes:
-        - truncate:
-            tableName: suppliers
+        - sql:
+            sql: TRUNCATE TABLE suppliers;
 
   - changeSet:
       id: state-1c-truncate-locations
@@ -119,9 +119,8 @@ databaseChangeLog:
           tableExists:
             tableName: locations
       changes:
-        - truncate:
-            tableName: locations
-            cascadeConstraints: true
+        - sql:
+            sql: TRUNCATE TABLE locations CASCADE;
 
   # ── Reseed locations ─────────────────────────────────────────────────────────
   # ON CONFLICT DO NOTHING: safe if truncate was skipped (MARK_RAN)
