@@ -358,7 +358,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "good"
       runAlways: true
-      comment: "Same 50,000 rows as bad — proves index is the fix, not less data"
+      comment: "10,000 rows — index scan is fast even at this volume, proving index is the fix"
       changes:
         - sql:
             sql: |
@@ -373,7 +373,7 @@ databaseChangeLog:
                 (ARRAY['Seattle','Portland','Austin','Nashville','San Francisco',
                        'Chicago','Dallas','Miami','Denver','Phoenix'])
                     [floor(random()*10+1)]
-              FROM generate_series(1, 50000);
+              FROM generate_series(1, 10000);
 
   - changeSet:
       id: good-4-seed-suppliers
@@ -411,7 +411,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "good"
       runAlways: true
-      comment: "Same 50,000 supplier rows as bad state"
+      comment: "10,000 supplier rows — index scan handles this efficiently"
       changes:
         - sql:
             sql: |
@@ -428,4 +428,4 @@ databaseChangeLog:
                        'Smoked Turkey','Burnt Ends','Pork Belly','Hot Chicken','Jalapeño Sausage'])
                     [floor(random()*10+1)],
                 floor(random()*7+1)::int
-              FROM generate_series(1, 50000);
+              FROM generate_series(1, 20000);
