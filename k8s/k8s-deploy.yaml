@@ -20,7 +20,7 @@ metadata:
   labels:
     app: bbqinventoryapp
 spec:
-  replicas: 3
+  replicas: 2
   revisionHistoryLimit: 10
   progressDeadlineSeconds: 600
   selector:
@@ -47,14 +47,14 @@ spec:
             while true; do
               for loc in $LOCATIONS; do
                 curl -s "localhost:8080/inventory-by-location?location=$loc" > /dev/null
-                sleep 0.05
+                sleep 0.1
                 curl -s "localhost:8080/supplier-summary?location=$loc" > /dev/null
-                sleep 0.05
+                sleep 0.1
               done
               curl -s "localhost:8080/inventory/low-stock?threshold=20" > /dev/null
-              sleep 0.1
+              sleep 0.3
               curl -s "localhost:8080/locations" > /dev/null
-              sleep 0.2
+              sleep 0.3
             done
         resources:
           requests:
