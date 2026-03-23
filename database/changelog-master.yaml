@@ -2,7 +2,7 @@
 # Single master changelog for BBQBookkeeper DBMarlin demo.
 #
 # Context tags:
-#   "bad or good"  → runs in BOTH states (schema, locations)
+#   "bad or good"  → runs in BOTH states (schema, truncate, locations)
 #   "bad"          → runs only in bad state (drop indexes, bulk data)
 #   "good"         → runs only in good state (add indexes, bulk data)
 #
@@ -11,33 +11,30 @@
 #   Good pipeline → context: good
 #
 # IMPORTANT: Every changeSet has an explicit context tag.
-# Harness DB Ops skips changesets with no context when a context filter is applied.
+# Harness skips changesets with no context when a context filter is applied.
 #
-# RESILIENCE DESIGN:
-#   - All CREATE TABLE use IF NOT EXISTS → safe on fresh or existing DB
-#   - All TRUNCATE wrapped in DO $$ blocks → safe if table doesn't exist
-#   - All INSERT locations use ON CONFLICT DO NOTHING → safe if already seeded
-#   - All DROP INDEX use IF EXISTS → safe on fresh DB
-#   - seed changesets preceded by a locations existence check
-#   - bulk inserts only run after seed inserts succeed (sequential changeset order)
-#
-# VISUAL DIFFERENCE DESIGN:
-#   Bad state:  200,000 rows (inventory) + 100,000 rows (suppliers), no indexes
-#               + pg_sleep(0.01) injected via trigger to amplify wait time
-#               + intentional cross-join on suppliers for max scan cost
-#   Good state: same row counts, 3 functional indexes, trigger removed
+# DESIGN DECISIONS:
+#   - Schema uses CREATE TABLE IF NOT EXISTS → idempotent, safe on any DB state
+#   - validCheckSum: ANY → schema SQL changes never cause checksum failures
+#   - Truncate split into 3 changesets with individual preConditions → each
+#     table checked independently, no DO $$ blocks (Liquibase parses $$ as param)
+#   - Locations use ON CONFLICT DO NOTHING → safe if truncate was skipped
+#   - state-3 drop constraints uses IF EXISTS → safe on fresh tables
+#   - bad/good seed changesets have no FK guard needed because state-2 always
+#     seeds locations first with ON CONFLICT DO NOTHING
 
 databaseChangeLog:
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # SCHEMA — runs in both bad and good, idempotent
-  # ════════════════════════════════════════════════════════════════════════════
+  # ── Schema ───────────────────────────────────────────────────────────────────
+  # CREATE TABLE IF NOT EXISTS is idempotent — safe on fresh and existing DBs.
+  # validCheckSum: ANY means future SQL edits never cause checksum failures.
 
   - changeSet:
       id: schema-1-create-locations
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
+      validCheckSum: ANY
       changes:
         - sql:
             sql: |
@@ -52,6 +49,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
+      validCheckSum: ANY
       changes:
         - sql:
             sql: |
@@ -68,6 +66,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runOnChange: false
+      validCheckSum: ANY
       changes:
         - sql:
             sql: |
@@ -79,39 +78,54 @@ databaseChangeLog:
                 lead_days INTEGER NOT NULL DEFAULT 1
               );
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # TRUNCATE — runs always, safe on both fresh and existing DB
-  # Uses DO $$ block so TRUNCATE is skipped gracefully if table doesn't exist
-  # Fix #1: checks both inventory AND suppliers before truncating
-  # Fix #7: guarantees clean slate before every bulk insert
-  # ════════════════════════════════════════════════════════════════════════════
+  # ── Truncate ─────────────────────────────────────────────────────────────────
+  # Split into 3 separate changesets — each with its own preCondition.
+  # Avoids DO $$ blocks which Liquibase misparses as parameter placeholders.
+  # Order: inventory first (has FK to locations), then suppliers, then locations.
 
   - changeSet:
-      id: state-1-truncate
+      id: state-1a-truncate-inventory
       author: bbqbookkeeper
       context: "bad or good"
       runAlways: true
+      preConditions:
+        - onFail: MARK_RAN
+          tableExists:
+            tableName: inventory
       changes:
-        - sql:
-            sql: |
-              DO $$
-              BEGIN
-                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'inventory') THEN
-                  TRUNCATE TABLE inventory;
-                END IF;
-                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'suppliers') THEN
-                  TRUNCATE TABLE suppliers;
-                END IF;
-                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'locations') THEN
-                  TRUNCATE TABLE locations CASCADE;
-                END IF;
-              END $$;
+        - truncate:
+            tableName: inventory
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # RESEED LOCATIONS — runs always
-  # Fix #3: ON CONFLICT DO NOTHING prevents unique violation if truncate was skipped
-  # Fix #2: locations always seeded before inventory FK inserts
-  # ════════════════════════════════════════════════════════════════════════════
+  - changeSet:
+      id: state-1b-truncate-suppliers
+      author: bbqbookkeeper
+      context: "bad or good"
+      runAlways: true
+      preConditions:
+        - onFail: MARK_RAN
+          tableExists:
+            tableName: suppliers
+      changes:
+        - truncate:
+            tableName: suppliers
+
+  - changeSet:
+      id: state-1c-truncate-locations
+      author: bbqbookkeeper
+      context: "bad or good"
+      runAlways: true
+      preConditions:
+        - onFail: MARK_RAN
+          tableExists:
+            tableName: locations
+      changes:
+        - truncate:
+            tableName: locations
+            cascadeConstraints: true
+
+  # ── Reseed locations ─────────────────────────────────────────────────────────
+  # ON CONFLICT DO NOTHING: safe if truncate was skipped (MARK_RAN)
+  # and locations already have data.
 
   - changeSet:
       id: state-2-reseed-locations
@@ -134,68 +148,44 @@ databaseChangeLog:
                 ('Phoenix','Phoenix')
               ON CONFLICT (name) DO NOTHING;
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # DROP CONSTRAINTS — runs always, safe with IF EXISTS
-  # ════════════════════════════════════════════════════════════════════════════
+  # ── Drop constraints ─────────────────────────────────────────────────────────
+  # IF EXISTS makes this safe on fresh tables with no constraints yet.
 
   - changeSet:
       id: state-3-drop-constraints
       author: bbqbookkeeper
       context: "bad or good"
       runAlways: true
+      preConditions:
+        - onFail: MARK_RAN
+          tableExists:
+            tableName: inventory
       changes:
         - sql:
             sql: |
               ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_name_location_key;
               ALTER TABLE suppliers DROP CONSTRAINT IF EXISTS suppliers_name_location_key;
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # BAD STATE
-  # Visual amplification:
-  #   - 200,000 inventory rows (4x more than before)
-  #   - 100,000 supplier rows (2x more than before)
-  #   - pg_sleep trigger on inventory SELECT to amplify wait time in DBMarlin
-  #   - No indexes on any join column
-  # ════════════════════════════════════════════════════════════════════════════
+  # ── BAD state ────────────────────────────────────────────────────────────────
 
   - changeSet:
-      id: bad-1-drop-indexes-and-set-trigger
+      id: bad-1-drop-indexes
       author: bbqbookkeeper
       context: "bad"
       runAlways: true
-      comment: "BAD: drop all indexes + install sleep trigger for visible wait time"
+      comment: "BAD: drop all functional indexes — forces sequential scans on LOWER() join columns"
       changes:
         - sql:
             sql: |
-              -- Drop all functional indexes
               DROP INDEX IF EXISTS idx_inventory_location_lower;
               DROP INDEX IF EXISTS idx_suppliers_location_lower;
               DROP INDEX IF EXISTS idx_suppliers_item_lower;
-
-              -- Drop good-state trigger if exists
-              DROP TRIGGER IF EXISTS trg_inventory_scan_cost ON inventory;
-              DROP FUNCTION IF EXISTS fn_inventory_scan_cost();
-
-              -- Install a per-row sleep trigger to amplify sequential scan cost
-              -- Each row scanned adds 0.5ms wait — at 5000 rows per query = 2.5s per query
-              -- Clearly visible in DBMarlin wait events as ClientRead waits
-              CREATE OR REPLACE FUNCTION fn_inventory_scan_cost()
-              RETURNS TRIGGER LANGUAGE plpgsql AS $$
-              BEGIN
-                PERFORM pg_sleep(0.0005);
-                RETURN NEW;
-              END $$;
-
-              CREATE TRIGGER trg_inventory_scan_cost
-              BEFORE INSERT ON inventory
-              FOR EACH ROW EXECUTE FUNCTION fn_inventory_scan_cost();
 
   - changeSet:
       id: bad-2-seed-inventory
       author: bbqbookkeeper
       context: "bad"
       runAlways: true
-      comment: "Known seed rows — trigger fires per row during INSERT"
       changes:
         - sql:
             sql: |
@@ -233,7 +223,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad"
       runAlways: true
-      comment: "200,000 random rows — 4x larger dataset amplifies sequential scan cost"
+      comment: "50,000 random rows — makes sequential scan genuinely expensive"
       changes:
         - sql:
             sql: |
@@ -248,33 +238,10 @@ databaseChangeLog:
                 (ARRAY['Seattle','Portland','Austin','Nashville','San Francisco',
                        'Chicago','Dallas','Miami','Denver','Phoenix'])
                     [floor(random()*10+1)]
-              FROM generate_series(1, 200000);
+              FROM generate_series(1, 50000);
 
   - changeSet:
-      id: bad-4-drop-trigger-after-insert
-      author: bbqbookkeeper
-      context: "bad"
-      runAlways: true
-      comment: "Drop INSERT trigger — we only want it on SELECT path via query cost"
-      changes:
-        - sql:
-            sql: |
-              -- Drop the INSERT trigger now that seeding is done
-              -- Re-create as a STATEMENT-level trigger on the SELECT side
-              -- by using a view that adds sleep to simulate scan cost
-              DROP TRIGGER IF EXISTS trg_inventory_scan_cost ON inventory;
-              DROP FUNCTION IF EXISTS fn_inventory_scan_cost();
-
-              -- Create a pg_sleep-based function used by the hot query via wrapper
-              -- This gets called by the application via a deliberately slow view
-              CREATE OR REPLACE VIEW inventory_scan AS
-              SELECT
-                i.id, i.name, i.quantity, i.location, i.unit,
-                pg_sleep(0) as scan_delay
-              FROM inventory i;
-
-  - changeSet:
-      id: bad-5-seed-suppliers
+      id: bad-4-seed-suppliers
       author: bbqbookkeeper
       context: "bad"
       runAlways: true
@@ -305,11 +272,11 @@ databaseChangeLog:
                 ('Desert Supply Co','Phoenix','Jalapeño Sausage',2);
 
   - changeSet:
-      id: bad-6-bulk-suppliers
+      id: bad-5-bulk-suppliers
       author: bbqbookkeeper
       context: "bad"
       runAlways: true
-      comment: "100,000 random supplier rows — larger join amplifies hash join cost"
+      comment: "50,000 random supplier rows — amplifies join cost with no indexes"
       changes:
         - sql:
             sql: |
@@ -326,14 +293,9 @@ databaseChangeLog:
                        'Smoked Turkey','Burnt Ends','Pork Belly','Hot Chicken','Jalapeño Sausage'])
                     [floor(random()*10+1)],
                 floor(random()*7+1)::int
-              FROM generate_series(1, 100000);
+              FROM generate_series(1, 50000);
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # GOOD STATE
-  # Fix #6: preCondition checks tables exist before creating indexes
-  # Visual difference: indexes added, slow view dropped, same 200k/100k rows
-  # The contrast in DBMarlin is purely from index scans replacing seq scans
-  # ════════════════════════════════════════════════════════════════════════════
+  # ── GOOD state ───────────────────────────────────────────────────────────────
 
   - changeSet:
       id: good-1-create-indexes
@@ -343,32 +305,17 @@ databaseChangeLog:
       comment: "THE FIX: functional indexes on all LOWER() join columns"
       preConditions:
         - onFail: MARK_RAN
-          and:
-            - tableExists:
-                tableName: inventory
-            - tableExists:
-                tableName: suppliers
+          tableExists:
+            tableName: inventory
       changes:
         - sql:
             sql: |
-              -- Remove slow view from bad state if exists
-              DROP VIEW IF EXISTS inventory_scan;
-
-              -- Drop and recreate all functional indexes cleanly
               DROP INDEX IF EXISTS idx_inventory_location_lower;
               DROP INDEX IF EXISTS idx_suppliers_location_lower;
               DROP INDEX IF EXISTS idx_suppliers_item_lower;
-
-              CREATE INDEX idx_inventory_location_lower
-                  ON inventory (LOWER(location));
-              CREATE INDEX idx_suppliers_location_lower
-                  ON suppliers (LOWER(location));
-              CREATE INDEX idx_suppliers_item_lower
-                  ON suppliers (LOWER(item));
-
-              -- Also remove any leftover sleep trigger from bad state
-              DROP TRIGGER IF EXISTS trg_inventory_scan_cost ON inventory;
-              DROP FUNCTION IF EXISTS fn_inventory_scan_cost();
+              CREATE INDEX idx_inventory_location_lower ON inventory (LOWER(location));
+              CREATE INDEX idx_suppliers_location_lower ON suppliers (LOWER(location));
+              CREATE INDEX idx_suppliers_item_lower ON suppliers (LOWER(item));
 
   - changeSet:
       id: good-2-seed-inventory
@@ -412,7 +359,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "good"
       runAlways: true
-      comment: "Same 200,000 rows as bad — index makes all the difference"
+      comment: "Same 50,000 rows as bad — proves index is the fix, not less data"
       changes:
         - sql:
             sql: |
@@ -427,7 +374,7 @@ databaseChangeLog:
                 (ARRAY['Seattle','Portland','Austin','Nashville','San Francisco',
                        'Chicago','Dallas','Miami','Denver','Phoenix'])
                     [floor(random()*10+1)]
-              FROM generate_series(1, 200000);
+              FROM generate_series(1, 50000);
 
   - changeSet:
       id: good-4-seed-suppliers
@@ -465,7 +412,7 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "good"
       runAlways: true
-      comment: "Same 100,000 supplier rows as bad state"
+      comment: "Same 50,000 supplier rows as bad state"
       changes:
         - sql:
             sql: |
@@ -482,4 +429,4 @@ databaseChangeLog:
                        'Smoked Turkey','Burnt Ends','Pork Belly','Hot Chicken','Jalapeño Sausage'])
                     [floor(random()*10+1)],
                 floor(random()*7+1)::int
-              FROM generate_series(1, 100000);
+              FROM generate_series(1, 50000);
