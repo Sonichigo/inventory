@@ -137,12 +137,17 @@ databaseChangeLog:
                     nullable: false
 
   # ── Truncate — runs in both, always ─────────────────────────────────────────
+  # onFail: MARK_RAN handles fresh DB where tables don't exist yet
 
   - changeSet:
       id: state-1-truncate
       author: bbqbookkeeper
       context: "bad or good"
       runAlways: true
+      preConditions:
+        - onFail: MARK_RAN
+          tableExists:
+            tableName: inventory
       changes:
         - sql:
             sql: |
@@ -155,6 +160,10 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runAlways: true
+      preConditions:
+        - onFail: MARK_RAN
+          tableExists:
+            tableName: locations
       changes:
         - sql:
             sql: |
@@ -170,6 +179,10 @@ databaseChangeLog:
       author: bbqbookkeeper
       context: "bad or good"
       runAlways: true
+      preConditions:
+        - onFail: MARK_RAN
+          tableExists:
+            tableName: inventory
       changes:
         - sql:
             sql: |

@@ -144,7 +144,7 @@ func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
 
 func (d *DB) GetAllInventory() ([]InventoryItem, error) {
 	rows, err := d.conn.Query(
-		`SELECT id, name, quantity, location, unit FROM inventory ORDER BY location, name`,
+		`SELECT id, name, quantity, location, unit FROM inventory ORDER BY location, name LIMIT 100`,
 	)
 	if err != nil {
 		return nil, err
