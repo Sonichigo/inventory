@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Handler struct {
@@ -24,6 +25,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/inventory/low-stock", h.LowStock)
 	mux.HandleFunc("/locations", h.Locations)
 	mux.HandleFunc("/supplier-summary", h.SupplierSummary)
+	// Option A CV endpoint — polled by Harness Custom Health Source
+	mux.HandleFunc("/metrics", h.Metrics)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -63,7 +66,11 @@ func (h *Handler) InventoryByLocation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "location query parameter is required")
 		return
 	}
+	start := time.Now()
 	items, err := h.db.GetInventoryByLocation(location)
+	elapsed := time.Since(start).Milliseconds()
+	metrics.Record(elapsed, err != nil)
+
 	if err != nil {
 		log.Printf("GetInventoryByLocation error: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to fetch inventory")
@@ -233,4 +240,16 @@ func (h *Handler) SupplierSummary(w http.ResponseWriter, r *http.Request) {
 		summary = []SupplierSummary{}
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+// GET /metrics
+// Option A CV endpoint — polled by Harness Custom Health Source every 30s.
+// Returns rolling query timing stats for the hot /inventory-by-location query.
+// Harness CV thresholds: avg_response_ms > 50 = degraded, > 100 = fail
+func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics.Snapshot())
 }

@@ -84,7 +84,7 @@ databaseChangeLog:
   # Order: inventory first (has FK to locations), then suppliers, then locations.
 
   - changeSet:
-      id: state-1a-truncate-inventory
+      id: state-1a-delete-inventory
       author: bbqbookkeeper
       context: "bad or good"
       runAlways: true
@@ -94,10 +94,10 @@ databaseChangeLog:
             tableName: inventory
       changes:
         - sql:
-            sql: TRUNCATE TABLE inventory;
+            sql: DELETE FROM inventory WHERE 1=1;
 
   - changeSet:
-      id: state-1b-truncate-suppliers
+      id: state-1b-delete-suppliers
       author: bbqbookkeeper
       context: "bad or good"
       runAlways: true
@@ -107,10 +107,10 @@ databaseChangeLog:
             tableName: suppliers
       changes:
         - sql:
-            sql: TRUNCATE TABLE suppliers;
+            sql: DELETE FROM suppliers WHERE 1=1;
 
   - changeSet:
-      id: state-1c-truncate-locations
+      id: state-1c-delete-locations
       author: bbqbookkeeper
       context: "bad or good"
       runAlways: true
@@ -120,7 +120,7 @@ databaseChangeLog:
             tableName: locations
       changes:
         - sql:
-            sql: TRUNCATE TABLE locations CASCADE;
+            sql: DELETE FROM inventory WHERE 1=1; DELETE FROM suppliers WHERE 1=1; DELETE FROM locations WHERE 1=1;
 
   # ── Reseed locations ─────────────────────────────────────────────────────────
   # ON CONFLICT DO NOTHING: safe if truncate was skipped (MARK_RAN)
@@ -428,4 +428,19 @@ databaseChangeLog:
                        'Smoked Turkey','Burnt Ends','Pork Belly','Hot Chicken','Jalapeño Sausage'])
                     [floor(random()*10+1)],
                 floor(random()*7+1)::int
-              FROM generate_series(1, 20000);
+              FROM generate_series(1, 10000);
+
+  - changeSet:
+      id: good-6-dedup-suppliers
+      author: bbqbookkeeper
+      context: "good"
+      runAlways: true
+      comment: "Deduplicate suppliers — one row per location+item to prevent JOIN fanout"
+      changes:
+        - sql:
+            sql: |
+              DELETE FROM suppliers
+              WHERE id NOT IN (
+                SELECT MIN(id) FROM suppliers
+                GROUP BY location, item
+              );
