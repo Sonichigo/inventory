@@ -242,14 +242,16 @@ func (h *Handler) SupplierSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, summary)
 }
 
-// GET /metrics
-// Option A CV endpoint — polled by Harness Custom Health Source every 30s.
-// Returns rolling query timing stats for the hot /inventory-by-location query.
+// GET /metrics?from=start_time&to=end_time
+// Option A CV endpoint — polled by Harness Custom Health Source.
+// from/to params accepted but ignored — metrics are rolling window not time-ranged.
+// Wrapped in array — Harness CV JSON path requires at least 2 wildcards (*).
 // Harness CV thresholds: avg_response_ms > 50 = degraded, > 100 = fail
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, metrics.Snapshot())
+	// Wrap in array — Harness CV JSON path requires $.*.field notation
+	writeJSON(w, http.StatusOK, []MetricsResponse{metrics.Snapshot()})
 }
