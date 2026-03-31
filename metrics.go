@@ -59,7 +59,7 @@ func (m *MetricsStore) Snapshot() MetricsResponse {
 		TotalErrors:   errors,
 		AvgResponseMs: avg,
 		P95ResponseMs: p95,
-		UptimeSecs:    int64(time.Since(m.windowStart).Seconds()),
+		TimestampMs:   time.Now().UnixMilli(),
 	}
 }
 

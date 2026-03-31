@@ -61,5 +61,5 @@ type MetricsResponse struct {
 	TotalErrors   int64 `json:"total_errors"`
 	AvgResponseMs int64 `json:"avg_response_ms"`
 	P95ResponseMs int64 `json:"p95_response_ms"`
-	UptimeSecs    int64 `json:"uptime_secs"`
+	TimestampMs   int64 `json:"timestamp_ms"`
 }

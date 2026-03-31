@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -27,6 +29,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/supplier-summary", h.SupplierSummary)
 	// Option A CV endpoint — polled by Harness Custom Health Source
 	mux.HandleFunc("/metrics", h.Metrics)
+	// DBMarlin proxy — translates Harness epoch ms → DBMarlin date format
+	mux.HandleFunc("/dbmarlin-metrics", h.DBMarlinMetrics)
+	// DBMarlin proxy — converts Harness epoch ms to DBMarlin date format
+	mux.HandleFunc("/dbmarlin/activity", h.DBMarlinActivity)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -254,4 +260,115 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	}
 	// Wrap in array — Harness CV JSON path requires $.*.field notation
 	writeJSON(w, http.StatusOK, []MetricsResponse{metrics.Snapshot()})
+}
+
+// GET /dbmarlin/activity?from=<epoch_ms>&to=<epoch_ms>
+// Proxy endpoint — Harness CV passes epoch ms, DBMarlin expects date strings.
+// This converts and forwards to DBMarlin, returning the activity summary.
+// Harness CV JSON paths: $.[*].avgwaittime and $.[*].executions
+func (h *Handler) DBMarlinActivity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Parse from/to as epoch milliseconds from Harness
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+
+	var fromMs, toMs int64
+	if fromStr == "" || toStr == "" {
+		// fallback: last 10 minutes
+		toMs = time.Now().UnixMilli()
+		fromMs = toMs - 10*60*1000
+	} else {
+		var err error
+		fromMs, err = strconv.ParseInt(fromStr, 10, 64)
+		if err != nil {
+			fromMs = time.Now().UnixMilli() - 10*60*1000
+		}
+		toMs, err = strconv.ParseInt(toStr, 10, 64)
+		if err != nil {
+			toMs = time.Now().UnixMilli()
+		}
+	}
+
+	// Convert epoch ms to DBMarlin date format: 2026-03-25+11:56:11
+	fromTime := time.UnixMilli(fromMs).UTC().Format("2006-01-02+15:04:05")
+	toTime := time.UnixMilli(toMs).UTC().Format("2006-01-02+15:04:05")
+
+	dbmarlinURL := fmt.Sprintf(
+		"http://34.69.236.9:9090/archiver/rest/v1/activity/summary?from=%s&to=%s&tz=Europe/London&interval=0&id=1",
+		fromTime, toTime,
+	)
+
+	resp, err := http.Get(dbmarlinURL)
+	if err != nil {
+		log.Printf("DBMarlin proxy error: %v", err)
+		writeError(w, http.StatusBadGateway, "failed to reach DBMarlin")
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+// GET /dbmarlin-metrics?from=START_EPOCH_MS&to=END_EPOCH_MS
+// Proxy endpoint — Harness CV passes epoch ms, DBMarlin expects date string format.
+// This translates between the two and returns real DB wait time metrics from DBMarlin.
+// Harness Custom Health Source config:
+//
+//	Base URL: http://35.192.158.3:8080
+//	Path:     dbmarlin-metrics?from=start_time&to=end_time
+//	Unit:     Milliseconds
+func (h *Handler) DBMarlinMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+
+	if fromStr == "" || toStr == "" {
+		writeError(w, http.StatusBadRequest, "from and to parameters are required")
+		return
+	}
+
+	// Harness passes epoch milliseconds — convert to DBMarlin date format
+	fromMs, err := strconv.ParseInt(fromStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid from timestamp")
+		return
+	}
+	toMs, err := strconv.ParseInt(toStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid to timestamp")
+		return
+	}
+
+	// DBMarlin expects: 2026-03-25+11:56:11
+	from := time.UnixMilli(fromMs).UTC().Format("2006-01-02+15:04:05")
+	to := time.UnixMilli(toMs).UTC().Format("2006-01-02+15:04:05")
+
+	dbmarlinURL := fmt.Sprintf(
+		"http://34.69.236.9:9090/archiver/rest/v1/activity/summary?from=%s&to=%s&tz=Europe/London&interval=0&id=1",
+		from, to,
+	)
+
+	log.Printf("DBMarlin proxy: %s", dbmarlinURL)
+
+	resp, err := http.Get(dbmarlinURL)
+	if err != nil {
+		log.Printf("DBMarlin proxy error: %v", err)
+		writeError(w, http.StatusBadGateway, "failed to reach DBMarlin")
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
