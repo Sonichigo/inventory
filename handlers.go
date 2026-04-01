@@ -316,45 +316,50 @@ func (h *Handler) DBMarlinActivity(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /dbmarlin-metrics?from=START_EPOCH_MS&to=END_EPOCH_MS
-// Proxy endpoint — Harness CV passes epoch ms, DBMarlin expects date string format.
-// This translates between the two and returns real DB wait time metrics from DBMarlin.
-// Harness Custom Health Source config:
-//
-//	Base URL: http://35.192.158.3:8080
-//	Path:     dbmarlin-metrics?from=start_time&to=end_time
-//	Unit:     Milliseconds
+// Proxy endpoint — translates Harness epoch ms → DBMarlin date format.
+// Falls back to last 10 minutes if from/to are missing (connection test).
+// Response is always a JSON array — Harness CV requires $.[*] path notation.
 func (h *Handler) DBMarlinMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
+	var fromTime, toTime time.Time
+
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 
 	if fromStr == "" || toStr == "" {
-		writeError(w, http.StatusBadRequest, "from and to parameters are required")
-		return
+		// Connection test / no params — use last 30 minutes in UTC
+		toTime = time.Now().UTC()
+		fromTime = toTime.Add(-30 * time.Minute)
+	} else {
+		// Harness passes epoch milliseconds
+		fromMs, err := strconv.ParseInt(fromStr, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid from timestamp")
+			return
+		}
+		toMs, err := strconv.ParseInt(toStr, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid to timestamp")
+			return
+		}
+		fromTime = time.UnixMilli(fromMs).UTC()
+		toTime = time.UnixMilli(toMs).UTC()
+		// Enforce minimum 30 minute window — short windows return empty array
+		if toTime.Sub(fromTime) < 30*time.Minute {
+			fromTime = toTime.Add(-30 * time.Minute)
+		}
 	}
 
-	// Harness passes epoch milliseconds — convert to DBMarlin date format
-	fromMs, err := strconv.ParseInt(fromStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid from timestamp")
-		return
-	}
-	toMs, err := strconv.ParseInt(toStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid to timestamp")
-		return
-	}
-
-	// DBMarlin expects: 2026-03-25+11:56:11
-	from := time.UnixMilli(fromMs).UTC().Format("2006-01-02+15:04:05")
-	to := time.UnixMilli(toMs).UTC().Format("2006-01-02+15:04:05")
+	// DBMarlin expects: 2006-01-02+15:04:05 in UTC
+	from := fromTime.Format("2006-01-02+15:04:05")
+	to := toTime.Format("2006-01-02+15:04:05")
 
 	dbmarlinURL := fmt.Sprintf(
-		"http://34.69.236.9:9090/archiver/rest/v1/activity/summary?from=%s&to=%s&tz=Europe/London&interval=0&id=1",
+		"http://34.69.236.9:9090/archiver/rest/v1/activity/summary?from=%s&to=%s&tz=UTC&interval=0&id=1",
 		from, to,
 	)
 
@@ -368,7 +373,33 @@ func (h *Handler) DBMarlinMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to read DBMarlin response")
+		return
+	}
+
+	// Parse DBMarlin response and wrap to match Harness CV JSON path requirements.
+	// Harness requires at least 2 wildcards (*) in metricValueJsonPath and timestampJsonPath.
+	// Structure matches the Harness docs example: $.data.[*].attributes.field
+	var dbmarlinData []map[string]interface{}
+	if err := json.Unmarshal(body, &dbmarlinData); err != nil {
+		writeError(w, http.StatusBadGateway, "failed to parse DBMarlin response")
+		return
+	}
+
+	// Wrap into: {"data": [{"attributes": {...dbmarlin fields...}}]}
+	// JSON paths: $.data.[*].attributes.waittime  ← 2 wildcards satisfied
+	type attributes struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	wrappedData := make([]map[string]interface{}, len(dbmarlinData))
+	for i, d := range dbmarlinData {
+		wrappedData[i] = map[string]interface{}{"attributes": d}
+	}
+	result := map[string]interface{}{"data": wrappedData}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	w.WriteHeader(200)
+	json.NewEncoder(w).Encode(result)
 }
