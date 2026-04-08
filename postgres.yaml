@@ -40,6 +40,9 @@ spec:
     spec:
       containers:
       - name: postgres-dbops
+        args:
+        - "-c"
+        - "shared_preload_libraries=pg_stat_statements"
         image: postgres:14
         envFrom:
         - configMapRef:
