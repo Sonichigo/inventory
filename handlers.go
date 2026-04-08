@@ -298,7 +298,7 @@ func (h *Handler) DBMarlinActivity(w http.ResponseWriter, r *http.Request) {
 	toTime := time.UnixMilli(toMs).UTC().Format("2006-01-02+15:04:05")
 
 	dbmarlinURL := fmt.Sprintf(
-		"http://34.69.236.9:9090/archiver/rest/v1/activity/summary?from=%s&to=%s&tz=Europe/London&interval=0&id=1",
+		"http://34.83.129.106:9090/archiver/rest/v1/activity/summary?from=%s&to=%s&tz=Europe/London&interval=0&id=1",
 		fromTime, toTime,
 	)
 
@@ -359,7 +359,7 @@ func (h *Handler) DBMarlinMetrics(w http.ResponseWriter, r *http.Request) {
 	to := toTime.Format("2006-01-02+15:04:05")
 
 	dbmarlinURL := fmt.Sprintf(
-		"http://34.69.236.9:9090/archiver/rest/v1/activity/summary?from=%s&to=%s&tz=UTC&interval=0&id=1",
+		"http://34.83.129.106:9090/archiver/rest/v1/activity/summary?from=%s&to=%s&tz=UTC&interval=0&id=1",
 		from, to,
 	)
 
@@ -379,25 +379,33 @@ func (h *Handler) DBMarlinMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse DBMarlin response and wrap to match Harness CV JSON path requirements.
-	// Harness requires at least 2 wildcards (*) in metricValueJsonPath and timestampJsonPath.
-	// Structure matches the Harness docs example: $.data.[*].attributes.field
+	// Parse DBMarlin response and wrap to match Harness CV grouped-by-host structure.
+	// Harness Custom Health Metric requires data grouped by host (Service Instance Identifier).
+	// Required structure:
+	//   { all_hosts_data: [{ host: "...", results: [{ waittime: X, executions: Y, timestamp: Z }] }] }
+	// JSON paths:
+	//   metricValueJsonPath:     $.all_hosts_data.[*].results.[*].waittime
+	//   timestampJsonPath:       $.all_hosts_data.[*].results.[*].timestamp
+	//   serviceInstanceJsonPath: $.all_hosts_data.[*].host
 	var dbmarlinData []map[string]interface{}
 	if err := json.Unmarshal(body, &dbmarlinData); err != nil {
 		writeError(w, http.StatusBadGateway, "failed to parse DBMarlin response")
 		return
 	}
 
-	// Wrap into: {"data": [{"attributes": {...dbmarlin fields...}}]}
-	// JSON paths: $.data.[*].attributes.waittime  ← 2 wildcards satisfied
-	type attributes struct {
-		Data []map[string]interface{} `json:"data"`
+	// Add current timestamp to each result for Harness timeline
+	for _, d := range dbmarlinData {
+		d["timestamp"] = time.Now().UnixMilli()
 	}
-	wrappedData := make([]map[string]interface{}, len(dbmarlinData))
-	for i, d := range dbmarlinData {
-		wrappedData[i] = map[string]interface{}{"attributes": d}
+
+	result := map[string]interface{}{
+		"all_hosts_data": []map[string]interface{}{
+			{
+				"host":    "postgres-dbops",
+				"results": dbmarlinData,
+			},
+		},
 	}
-	result := map[string]interface{}{"data": wrappedData}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
