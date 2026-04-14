@@ -1,4 +1,4 @@
-// +build !bad
+// +build bad
 
 package main
 
@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -73,6 +74,7 @@ func NewDB(cfg Config) (*DB, error) {
 	}
 
 	// ── Step 4: connect as app user ───────────────────────────────────────────
+	// BAD: Severely limited connection pool → connection exhaustion under load
 	appDSN := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		cfg.Server, cfg.Port, cfg.User, cfg.Password, cfg.DBName,
@@ -81,11 +83,12 @@ func NewDB(cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app connect failed: %w", err)
 	}
-	appConn.SetMaxOpenConns(25)
-	appConn.SetMaxIdleConns(5)
-	appConn.SetConnMaxLifetime(5 * time.Minute)
+	// BAD: Only 2 max connections instead of 25
+	appConn.SetMaxOpenConns(2)
+	appConn.SetMaxIdleConns(1)
+	appConn.SetConnMaxLifetime(1 * time.Minute)
 
-	log.Println("Database connected — schema managed by Liquibase")
+	log.Println("Database connected [BAD VERSION] — schema managed by Liquibase")
 	return &DB{conn: appConn}, nil
 }
 
@@ -108,20 +111,18 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, erro
 
 func (d *DB) Ping() error { return d.conn.Ping() }
 
-// GetInventoryByLocation joins inventory against suppliers on LOWER() columns.
-// BAD state:  no indexes → sequential scan on both tables + hash join
-// GOOD state: functional indexes on all join columns → index scans, sub-ms
+// GetInventoryByLocation — BAD VERSION
+// Anti-pattern: N+1 queries instead of JOIN
+// 1. Fetch all inventory for location (no JOIN)
+// 2. For EACH item, make a separate query to suppliers table
+// With 50k rows, this makes 50k+ queries instead of 1 JOIN
 func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
+	// BAD: No JOIN, fetch inventory only
 	rows, err := d.conn.Query(
-		`SELECT i.id, i.name, i.quantity, i.location, i.unit,
-		        COALESCE(s.name, ''),
-		        COALESCE(s.lead_days, 0)
-		   FROM inventory i
-		   LEFT JOIN suppliers s
-		          ON LOWER(s.location) = LOWER(i.location)
-		         AND LOWER(s.item)     = LOWER(i.name)
-		  WHERE LOWER(i.location) = LOWER($1)
-		  ORDER BY i.name`,
+		`SELECT id, name, quantity, location, unit
+		   FROM inventory
+		  WHERE LOWER(location) = LOWER($1)
+		  ORDER BY name`,
 		location,
 	)
 	if err != nil {
@@ -135,18 +136,38 @@ func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
 		if err := rows.Scan(
 			&item.ID, &item.Name, &item.Quantity,
 			&item.Location, &item.Unit,
-			&item.Supplier, &item.LeadDays,
 		); err != nil {
 			return nil, err
 		}
+
+		// BAD: N+1 query pattern — one query PER item to get supplier
+		var supplierName sql.NullString
+		var leadDays sql.NullInt64
+		supplierErr := d.conn.QueryRow(
+			`SELECT name, lead_days FROM suppliers
+			  WHERE LOWER(location) = LOWER($1)
+			    AND LOWER(item) = LOWER($2)
+			  LIMIT 1`,
+			item.Location, item.Name,
+		).Scan(&supplierName, &leadDays)
+
+		if supplierErr == nil {
+			item.Supplier = supplierName.String
+			item.LeadDays = int(leadDays.Int64)
+		}
+		// Ignore errors, just use empty supplier
+
 		items = append(items, item)
 	}
 	return items, rows.Err()
 }
 
+// GetAllInventory — BAD VERSION
+// Anti-pattern: No LIMIT, loads ALL 50k+ rows into memory
 func (d *DB) GetAllInventory() ([]InventoryItem, error) {
+	// BAD: Removed LIMIT 100 — now fetches all 50k+ rows
 	rows, err := d.conn.Query(
-		`SELECT id, name, quantity, location, unit FROM inventory ORDER BY location, name LIMIT 100`,
+		`SELECT id, name, quantity, location, unit FROM inventory ORDER BY location, name`,
 	)
 	if err != nil {
 		return nil, err
@@ -218,21 +239,16 @@ func (d *DB) GetLocations() ([]Location, error) {
 	return locs, rows.Err()
 }
 
-// GetLowStock returns items below a quantity threshold across all locations.
-// Triggers a full sequential scan + filter in bad state.
-// In good state, index on location helps narrow the scan.
+// GetLowStock — BAD VERSION
+// Anti-pattern 1: Fetch ALL inventory (no threshold filter in SQL)
+// Anti-pattern 2: Filter in Go memory instead of WHERE clause
+// Anti-pattern 3: N+1 queries for suppliers
 func (d *DB) GetLowStock(threshold int) ([]InventoryItem, error) {
+	// BAD: Fetch everything, no WHERE clause
 	rows, err := d.conn.Query(
-		`SELECT i.id, i.name, i.quantity, i.location, i.unit,
-		        COALESCE(s.name, ''),
-		        COALESCE(s.lead_days, 0)
-		   FROM inventory i
-		   LEFT JOIN suppliers s
-		          ON LOWER(s.location) = LOWER(i.location)
-		         AND LOWER(s.item)     = LOWER(i.name)
-		  WHERE i.quantity < $1
-		  ORDER BY i.quantity ASC, i.location`,
-		threshold,
+		`SELECT id, name, quantity, location, unit
+		   FROM inventory
+		  ORDER BY quantity ASC, location`,
 	)
 	if err != nil {
 		return nil, err
@@ -245,48 +261,129 @@ func (d *DB) GetLowStock(threshold int) ([]InventoryItem, error) {
 		if err := rows.Scan(
 			&item.ID, &item.Name, &item.Quantity,
 			&item.Location, &item.Unit,
-			&item.Supplier, &item.LeadDays,
 		); err != nil {
 			return nil, err
 		}
+
+		// BAD: Filter in Go instead of SQL
+		if item.Quantity >= threshold {
+			continue
+		}
+
+		// BAD: N+1 query for supplier
+		var supplierName sql.NullString
+		var leadDays sql.NullInt64
+		supplierErr := d.conn.QueryRow(
+			`SELECT name, lead_days FROM suppliers
+			  WHERE LOWER(location) = LOWER($1)
+			    AND LOWER(item) = LOWER($2)
+			  LIMIT 1`,
+			item.Location, item.Name,
+		).Scan(&supplierName, &leadDays)
+
+		if supplierErr == nil {
+			item.Supplier = supplierName.String
+			item.LeadDays = int(leadDays.Int64)
+		}
+
 		items = append(items, item)
 	}
 	return items, rows.Err()
 }
 
-// GetSupplierSummary returns aggregated supplier stats for a location.
-// Involves GROUP BY + AVG + COUNT + JOIN — expensive without indexes.
+// GetSupplierSummary — BAD VERSION
+// Anti-pattern 1: Fetch all suppliers (ignoring location filter)
+// Anti-pattern 2: Manual aggregation in Go instead of GROUP BY
+// Anti-pattern 3: Nested loops to join with inventory
 func (d *DB) GetSupplierSummary(location string) ([]SupplierSummary, error) {
-	rows, err := d.conn.Query(
-		`SELECT s.name,
-		        s.location,
-		        COUNT(DISTINCT i.name)    AS item_count,
-		        AVG(s.lead_days)          AS avg_lead_days,
-		        COALESCE(SUM(i.quantity), 0) AS total_stock
-		   FROM suppliers s
-		   LEFT JOIN inventory i
-		          ON LOWER(i.location) = LOWER(s.location)
-		         AND LOWER(i.name)     = LOWER(s.item)
-		  WHERE LOWER(s.location) = LOWER($1)
-		  GROUP BY s.name, s.location
-		  ORDER BY total_stock DESC`,
-		location,
+	// BAD: Fetch ALL suppliers, no WHERE clause
+	suppRows, err := d.conn.Query(
+		`SELECT name, location, item, lead_days FROM suppliers`,
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer suppRows.Close()
 
-	var summaries []SupplierSummary
-	for rows.Next() {
-		var s SupplierSummary
-		if err := rows.Scan(
-			&s.Supplier, &s.Location,
-			&s.ItemCount, &s.AvgLeadDays, &s.TotalStock,
-		); err != nil {
+	type supplier struct {
+		name      string
+		location  string
+		item      string
+		leadDays  int
+	}
+
+	var allSuppliers []supplier
+	for suppRows.Next() {
+		var s supplier
+		if err := suppRows.Scan(&s.name, &s.location, &s.item, &s.leadDays); err != nil {
 			return nil, err
 		}
-		summaries = append(summaries, s)
+		// BAD: Filter in Go instead of SQL WHERE
+		if strings.EqualFold(s.location, location) {
+			allSuppliers = append(allSuppliers, s)
+		}
 	}
-	return summaries, rows.Err()
+
+	// BAD: Fetch ALL inventory (no JOIN, no WHERE)
+	invRows, err := d.conn.Query(
+		`SELECT name, location, quantity FROM inventory`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer invRows.Close()
+
+	type invItem struct {
+		name     string
+		location string
+		quantity int
+	}
+
+	var allInventory []invItem
+	for invRows.Next() {
+		var i invItem
+		if err := invRows.Scan(&i.name, &i.location, &i.quantity); err != nil {
+			return nil, err
+		}
+		allInventory = append(allInventory, i)
+	}
+
+	// BAD: Manual aggregation in Go with nested loops (O(N*M) complexity)
+	summaryMap := make(map[string]*SupplierSummary)
+	for _, s := range allSuppliers {
+		key := s.name + "|" + s.location
+
+		if _, exists := summaryMap[key]; !exists {
+			summaryMap[key] = &SupplierSummary{
+				Supplier:    s.name,
+				Location:    s.location,
+				ItemCount:   0,
+				AvgLeadDays: 0,
+				TotalStock:  0,
+			}
+		}
+
+		summary := summaryMap[key]
+		summary.ItemCount++
+		summary.AvgLeadDays += float64(s.leadDays)
+
+		// BAD: Nested loop to find matching inventory
+		for _, inv := range allInventory {
+			if strings.EqualFold(inv.location, s.location) &&
+			   strings.EqualFold(inv.name, s.item) {
+				summary.TotalStock += inv.quantity
+			}
+		}
+	}
+
+	// Calculate averages
+	var summaries []SupplierSummary
+	for _, s := range summaryMap {
+		if s.ItemCount > 0 {
+			s.AvgLeadDays = s.AvgLeadDays / float64(s.ItemCount)
+		}
+		summaries = append(summaries, *s)
+	}
+
+	return summaries, nil
 }

@@ -1,6 +1,6 @@
 # BBQBookkeeper
 
-> A intentionally load-heavy BBQ inventory API used to demonstrate database performance degradation and monitoring with DBMarlin on Kubernetes.
+> A intentionally load-heavy BBQ inventory API demonstrating **BOTH application-level AND database-level** performance issues for DBMarlin monitoring on Kubernetes.
 
 ---
 
@@ -8,7 +8,14 @@
 
 BBQBookkeeper is a demo application purpose-built for [DBMarlin](https://www.dbmarlin.com) showcasing. It simulates a real-world BBQ restaurant chain managing inventory across multiple locations (Seattle, Portland, Austin, Nashville, San Francisco).
 
-The app comes with a **built-in load generator sidecar** that hammers the `/inventory-by-location` endpoint every 50ms, creating a continuous stream of database queries. This generates the kind of real, visible load that DBMarlin is designed to detect, analyse, and help you optimise — making it ideal for live demos, workshops, and performance monitoring walkthroughs.
+**NEW:** This demo now includes **TWO versions** of the application:
+- 🔴 **BAD** - Application with N+1 queries, missing indexes, poor connection pooling
+- 🟢 **GOOD** - Optimized application with JOINs, proper indexes, efficient queries
+
+The app comes with a **built-in load generator sidecar** that hammers the `/inventory-by-location` endpoint continuously, creating a real stream of database queries. This showcases how **both** application code AND database configuration affect performance — making it ideal for live demos, workshops, and performance monitoring walkthroughs.
+
+📖 **See [PERFORMANCE_DEMO.md](PERFORMANCE_DEMO.md) for detailed bad vs good comparison**  
+📖 **See [ANTI_PATTERNS.md](ANTI_PATTERNS.md) for specific anti-patterns introduced**
 
 ---
 
@@ -58,21 +65,103 @@ The app comes with a **built-in load generator sidecar** that hammers the `/inve
 - `kubectl` configured
 - Docker (to build and push the image)
 - DBMarlin pointed at your PostgreSQL instance
+- Liquibase (for database schema management with context switching)
 
 ---
 
-## What DBMarlin Will Show
+## Quick Start
 
-| Metric | Bad state | Good state | 
---- | --- | --- | 
-| Query plan |Sequential scan | Index scan | 
-| Avg query time |Several ms|Sub-ms| 
-| Total time |High|Drops significantly| 
-| Top statement |SELECT ... WHERE LOWER(location)|Same query, faster|
+### 1. Build Both Versions
+```bash
+# Build and push both bad and good images
+./build-and-push.sh
 
-- Top statements — the `/inventory-by-location` query dominates
-- Wait events — IO waits from sequential scans across all 3 replicas
-- Activity Comparison — before/after the ConfigMap swap shows the inflection point clearly
+# Or build manually:
+docker build --build-arg BUILD_VERSION=bad -t ghcr.io/sonichigo/bbqbookkeeper:bad .
+docker build --build-arg BUILD_VERSION=good -t ghcr.io/sonichigo/bbqbookkeeper:good .
+```
+
+### 2. Deploy Bad State (Demo Performance Issues)
+```bash
+# Deploy bad application
+kubectl apply -f k8s/k8s-deploy-bad.yaml
+
+# Run Liquibase with bad context (50k rows, no indexes)
+# Ensure your Liquibase pipeline uses: --contexts=bad
+```
+
+Access bad app: `http://<cluster-ip>:30003`
+
+### 3. Deploy Good State (Show Performance Fix)
+```bash
+# Deploy good application
+kubectl apply -f k8s/k8s-deploy-good.yaml
+
+# Run Liquibase with good context (10k rows, with indexes)
+# Ensure your Liquibase pipeline uses: --contexts=good
+```
+
+Access good app: `http://<cluster-ip>:30002`
+
+### 4. Monitor Performance Difference
+```bash
+# Check bad version metrics
+curl http://<bad-service>:8080/metrics | jq .avg_response_ms
+# Expected: 500-5000ms
+
+# Check good version metrics
+curl http://<good-service>:8080/metrics | jq .avg_response_ms
+# Expected: 5-50ms
+```
+
+---
+
+## Performance Comparison
+
+### 🔴 Bad State (Application + Database)
+**Application Issues:**
+- N+1 queries (1000s of separate queries)
+- No LIMIT clauses (loads all 50k rows)
+- In-memory filtering instead of SQL WHERE
+- Connection pool: only 2 connections
+- Manual aggregation (nested loops)
+
+**Database Issues:**
+- 50,000 inventory + 50,000 supplier rows
+- NO indexes on LOWER() columns
+- Sequential scans on every query
+- No deduplication (JOIN fanout)
+
+**Result:** Response times in **SECONDS**, 100% CPU usage
+
+### 🟢 Good State (Application + Database)
+**Application Fixes:**
+- Efficient JOINs (1 query replaces 1000s)
+- LIMIT clauses on large queries
+- SQL WHERE filtering
+- Connection pool: 25 connections
+- SQL GROUP BY aggregations
+
+**Database Fixes:**
+- 10,000 inventory + 10,000 supplier rows
+- Functional indexes on all LOWER() columns
+- Index scans on every query
+- Deduplicated suppliers
+
+**Result:** Response times in **MILLISECONDS**, <10% CPU usage
+
+### What DBMarlin Will Show
+
+| Metric | Bad State | Good State | 
+|--------|-----------|------------|
+| Query plan | Sequential scan (50k rows) | Index scan (<100 rows) |
+| Avg query time | 500-5000ms | 5-50ms |
+| Query count | 10,000+ queries/min (N+1) | 100-200 queries/min (JOINs) |
+| Top statement | SELECT ... (sequential scan) | SELECT ... (index scan) |
+| Wait events | IO waits, lock waits | Minimal waits |
+| Connection pool | Exhausted (queued) | Healthy (active) |
+
+**Speedup:** 100-1000x faster! ⚡
 
 ## Project Structure
 

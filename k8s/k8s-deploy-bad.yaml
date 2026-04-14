@@ -1,0 +1,140 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bbq-db-secret
+  namespace: default
+type: Opaque
+stringData:
+  db-init-user: "user"
+  db-init-pass: "password"
+  db-user:      "user"
+  db-password:  "password"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bbqbookeeper-web-bad
+  namespace: default
+  labels:
+    app: bbqinventoryapp
+    version: bad
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app: bbqinventoryapp
+      version: bad
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: bbqinventoryapp
+        version: bad
+    spec:
+      containers:
+      # ── load generator sidecar ───────────────────────────────────────────
+      - name: load-generator
+        image: curlimages/curl:7.85.0
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            LOCATIONS="Seattle Portland Austin Nashville Chicago Dallas Miami Denver Phoenix"
+            while true; do
+              for loc in $LOCATIONS; do
+                curl -s "localhost:8080/inventory-by-location?location=$loc" > /dev/null
+                sleep 0.1
+                curl -s "localhost:8080/supplier-summary?location=$loc" > /dev/null
+                sleep 0.1
+              done
+              curl -s "localhost:8080/inventory/low-stock?threshold=20" > /dev/null
+              sleep 0.3
+              curl -s "localhost:8080/locations" > /dev/null
+              sleep 0.3
+            done
+        resources:
+          requests:
+            cpu: "25m"
+            memory: "32Mi"
+          limits:
+            cpu: "50m"
+            memory: "64Mi"
+
+      # ── main app (BAD VERSION) ───────────────────────────────────────────
+      - name: bbqinventoryapp
+        image: ghcr.io/sonichigo/bbqbookkeeper:bad
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DB_SERVER
+          value: "postgres-dbops"  # Use bad DB instance
+        - name: DB_INIT_USER
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-init-user
+        - name: DB_INIT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-init-pass
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-user
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bbq-db-secret
+              key: db-password
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 3
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "200m"
+            memory: "512Mi"
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bbqbookkeeper-web-bad
+  namespace: default
+  labels:
+    app: bbqinventoryapp
+    version: bad
+spec:
+  type: LoadBalancer
+  selector:
+    app: bbqinventoryapp
+    version: bad
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30003
