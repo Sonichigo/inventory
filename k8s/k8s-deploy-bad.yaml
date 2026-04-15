@@ -27,7 +27,6 @@ spec:
   selector:
     matchLabels:
       app: bbqinventoryapp
-      version: bad
   strategy:
     type: RollingUpdate
     rollingUpdate:
