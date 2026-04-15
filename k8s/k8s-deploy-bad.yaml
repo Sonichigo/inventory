@@ -15,7 +15,7 @@ stringData:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: bbqbookeeper-web-bad
+  name: bbqbookeeper-web
   namespace: default
   labels:
     app: bbqinventoryapp
@@ -124,7 +124,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: bbqbookkeeper-web-bad
+  name: bbqbookkeeper-web
   namespace: default
   labels:
     app: bbqinventoryapp
@@ -133,8 +133,7 @@ spec:
   type: LoadBalancer
   selector:
     app: bbqinventoryapp
-    version: bad
   ports:
   - port: 8080
     targetPort: 8080
-    nodePort: 30003
+    nodePort: 30002
