@@ -49,14 +49,14 @@ spec:
             while true; do
               for loc in $LOCATIONS; do
                 curl -s "localhost:8080/inventory-by-location?location=$loc" > /dev/null
-                sleep 0.1
+                sleep 0.05
                 curl -s "localhost:8080/supplier-summary?location=$loc" > /dev/null
-                sleep 0.1
+                sleep 0.05
               done
               curl -s "localhost:8080/inventory/low-stock?threshold=20" > /dev/null
-              sleep 0.3
+              sleep 0.1
               curl -s "localhost:8080/locations" > /dev/null
-              sleep 0.3
+              sleep 0.1
             done
         resources:
           requests:

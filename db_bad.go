@@ -83,9 +83,9 @@ func NewDB(cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app connect failed: %w", err)
 	}
-	// BAD: Only 2 max connections instead of 25
-	appConn.SetMaxOpenConns(2)
-	appConn.SetMaxIdleConns(1)
+	// BAD: Only 5 max connections instead of 25 (still limited but allows more slow queries)
+	appConn.SetMaxOpenConns(5)
+	appConn.SetMaxIdleConns(2)
 	appConn.SetConnMaxLifetime(1 * time.Minute)
 
 	log.Println("Database connected [BAD VERSION] — schema managed by Liquibase")
@@ -141,13 +141,13 @@ func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
 		}
 
 		// BAD: N+1 query pattern — one query PER item to get supplier
+		// WORSE: No LIMIT 1 → scans ALL 50k suppliers for each item
 		var supplierName sql.NullString
 		var leadDays sql.NullInt64
 		supplierErr := d.conn.QueryRow(
 			`SELECT name, lead_days FROM suppliers
 			  WHERE LOWER(location) = LOWER($1)
-			    AND LOWER(item) = LOWER($2)
-			  LIMIT 1`,
+			    AND LOWER(item) = LOWER($2)`,
 			item.Location, item.Name,
 		).Scan(&supplierName, &leadDays)
 
@@ -271,13 +271,13 @@ func (d *DB) GetLowStock(threshold int) ([]InventoryItem, error) {
 		}
 
 		// BAD: N+1 query for supplier
+		// WORSE: No LIMIT 1 → scans ALL 50k suppliers for each item
 		var supplierName sql.NullString
 		var leadDays sql.NullInt64
 		supplierErr := d.conn.QueryRow(
 			`SELECT name, lead_days FROM suppliers
 			  WHERE LOWER(location) = LOWER($1)
-			    AND LOWER(item) = LOWER($2)
-			  LIMIT 1`,
+			    AND LOWER(item) = LOWER($2)`,
 			item.Location, item.Name,
 		).Scan(&supplierName, &leadDays)
 
