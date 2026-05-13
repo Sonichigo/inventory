@@ -1,4 +1,4 @@
-// +build !bad
+//go:build !bad
 
 package main
 

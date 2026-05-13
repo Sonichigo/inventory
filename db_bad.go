@@ -1,4 +1,4 @@
-// +build bad
+//go:build bad
 
 package main
 
@@ -83,9 +83,9 @@ func NewDB(cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app connect failed: %w", err)
 	}
-	// BAD: Only 5 max connections instead of 25 (still limited but allows more slow queries)
-	appConn.SetMaxOpenConns(5)
-	appConn.SetMaxIdleConns(2)
+	// BAD: Only 10 max connections instead of 25 (degraded but sustainable)
+	appConn.SetMaxOpenConns(10)
+	appConn.SetMaxIdleConns(3)
 	appConn.SetConnMaxLifetime(1 * time.Minute)
 
 	log.Println("Database connected [BAD VERSION] — schema managed by Liquibase")
@@ -141,13 +141,15 @@ func (d *DB) GetInventoryByLocation(location string) ([]InventoryItem, error) {
 		}
 
 		// BAD: N+1 query pattern — one query PER item to get supplier
-		// WORSE: No LIMIT 1 → scans ALL 50k suppliers for each item
+		// WORSE: No LIMIT 1 + LIKE + ORDER BY → scans and sorts ALL 50k suppliers
 		var supplierName sql.NullString
 		var leadDays sql.NullInt64
 		supplierErr := d.conn.QueryRow(
 			`SELECT name, lead_days FROM suppliers
-			  WHERE LOWER(location) = LOWER($1)
-			    AND LOWER(item) = LOWER($2)`,
+			  WHERE LOWER(location) LIKE '%' || LOWER($1) || '%'
+			    AND LOWER(item) LIKE '%' || LOWER($2) || '%'
+			    AND LENGTH(name) > 0
+			  ORDER BY LENGTH(name) DESC, lead_days DESC`,
 			item.Location, item.Name,
 		).Scan(&supplierName, &leadDays)
 
@@ -271,13 +273,15 @@ func (d *DB) GetLowStock(threshold int) ([]InventoryItem, error) {
 		}
 
 		// BAD: N+1 query for supplier
-		// WORSE: No LIMIT 1 → scans ALL 50k suppliers for each item
+		// WORSE: No LIMIT 1 + LIKE + ORDER BY → scans and sorts ALL 50k suppliers
 		var supplierName sql.NullString
 		var leadDays sql.NullInt64
 		supplierErr := d.conn.QueryRow(
 			`SELECT name, lead_days FROM suppliers
-			  WHERE LOWER(location) = LOWER($1)
-			    AND LOWER(item) = LOWER($2)`,
+			  WHERE LOWER(location) LIKE '%' || LOWER($1) || '%'
+			    AND LOWER(item) LIKE '%' || LOWER($2) || '%'
+			    AND LENGTH(name) > 0
+			  ORDER BY LENGTH(name) DESC, lead_days DESC`,
 			item.Location, item.Name,
 		).Scan(&supplierName, &leadDays)
 
