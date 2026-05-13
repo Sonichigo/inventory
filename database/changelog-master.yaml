@@ -24,11 +24,9 @@
 #     seeds locations first with ON CONFLICT DO NOTHING
 
 databaseChangeLog:
-
   # ── Schema ───────────────────────────────────────────────────────────────────
   # CREATE TABLE IF NOT EXISTS is idempotent — safe on fresh and existing DBs.
   # validCheckSum: ANY means future SQL edits never cause checksum failures.
-
   - changeSet:
       id: schema-1-create-locations
       author: bbqbookkeeper
@@ -43,7 +41,6 @@ databaseChangeLog:
                 name TEXT NOT NULL UNIQUE,
                 city TEXT NOT NULL
               );
-
   - changeSet:
       id: schema-2-create-inventory
       author: bbqbookkeeper
@@ -60,7 +57,6 @@ databaseChangeLog:
                 unit     TEXT    NOT NULL DEFAULT 'lbs',
                 location TEXT    NOT NULL REFERENCES locations(name) ON UPDATE CASCADE
               );
-
   - changeSet:
       id: schema-3-create-suppliers
       author: bbqbookkeeper
@@ -77,12 +73,10 @@ databaseChangeLog:
                 item      TEXT    NOT NULL,
                 lead_days INTEGER NOT NULL DEFAULT 1
               );
-
   # ── Truncate ─────────────────────────────────────────────────────────────────
   # Split into 3 separate changesets — each with its own preCondition.
   # Avoids DO $$ blocks which Liquibase misparses as parameter placeholders.
   # Order: inventory first (has FK to locations), then suppliers, then locations.
-
   - changeSet:
       id: state-1a-delete-inventory
       author: bbqbookkeeper
@@ -95,7 +89,6 @@ databaseChangeLog:
       changes:
         - sql:
             sql: DELETE FROM inventory WHERE 1=1;
-
   - changeSet:
       id: state-1b-delete-suppliers
       author: bbqbookkeeper
@@ -108,7 +101,6 @@ databaseChangeLog:
       changes:
         - sql:
             sql: DELETE FROM suppliers WHERE 1=1;
-
   - changeSet:
       id: state-1c-delete-locations
       author: bbqbookkeeper
@@ -121,11 +113,9 @@ databaseChangeLog:
       changes:
         - sql:
             sql: DELETE FROM inventory WHERE 1=1; DELETE FROM suppliers WHERE 1=1; DELETE FROM locations WHERE 1=1;
-
   # ── Reseed locations ─────────────────────────────────────────────────────────
   # ON CONFLICT DO NOTHING: safe if truncate was skipped (MARK_RAN)
   # and locations already have data.
-
   - changeSet:
       id: state-2-reseed-locations
       author: bbqbookkeeper
@@ -146,10 +136,8 @@ databaseChangeLog:
                 ('Denver','Denver'),
                 ('Phoenix','Phoenix')
               ON CONFLICT (name) DO NOTHING;
-
   # ── Drop constraints ─────────────────────────────────────────────────────────
   # IF EXISTS makes this safe on fresh tables with no constraints yet.
-
   - changeSet:
       id: state-3-drop-constraints
       author: bbqbookkeeper
@@ -164,9 +152,7 @@ databaseChangeLog:
             sql: |
               ALTER TABLE inventory DROP CONSTRAINT IF EXISTS inventory_name_location_key;
               ALTER TABLE suppliers DROP CONSTRAINT IF EXISTS suppliers_name_location_key;
-
   # ── BAD state ────────────────────────────────────────────────────────────────
-
   - changeSet:
       id: bad-1-drop-indexes
       author: bbqbookkeeper
@@ -179,7 +165,6 @@ databaseChangeLog:
               DROP INDEX IF EXISTS idx_inventory_location_lower;
               DROP INDEX IF EXISTS idx_suppliers_location_lower;
               DROP INDEX IF EXISTS idx_suppliers_item_lower;
-
   - changeSet:
       id: bad-2-seed-inventory
       author: bbqbookkeeper
@@ -216,7 +201,6 @@ databaseChangeLog:
                 ('Baby Back Ribs',20,'racks','Denver'),('Smoked Turkey',14,'lbs','Denver'),
                 ('Brisket',44,'lbs','Phoenix'),('Pulled Pork',24,'lbs','Phoenix'),
                 ('Jalapeño Sausage',38,'links','Phoenix'),('Chicken Wings',88,'pieces','Phoenix');
-
   - changeSet:
       id: bad-3-bulk-inventory
       author: bbqbookkeeper
@@ -238,7 +222,6 @@ databaseChangeLog:
                        'Chicago','Dallas','Miami','Denver','Phoenix'])
                     [floor(random()*10+1)]
               FROM generate_series(1, 50000);
-
   - changeSet:
       id: bad-4-seed-suppliers
       author: bbqbookkeeper
@@ -269,7 +252,6 @@ databaseChangeLog:
                 ('Miami Meats','Miami','Brisket',4),
                 ('Rocky Mountain Supply','Denver','Brisket',3),
                 ('Desert Supply Co','Phoenix','Jalapeño Sausage',2);
-
   - changeSet:
       id: bad-5-bulk-suppliers
       author: bbqbookkeeper
@@ -293,9 +275,7 @@ databaseChangeLog:
                     [floor(random()*10+1)],
                 floor(random()*7+1)::int
               FROM generate_series(1, 50000);
-
   # ── GOOD state ───────────────────────────────────────────────────────────────
-
   - changeSet:
       id: good-1-create-indexes
       author: bbqbookkeeper
@@ -315,7 +295,6 @@ databaseChangeLog:
               CREATE INDEX idx_inventory_location_lower ON inventory (LOWER(location));
               CREATE INDEX idx_suppliers_location_lower ON suppliers (LOWER(location));
               CREATE INDEX idx_suppliers_item_lower ON suppliers (LOWER(item));
-
   - changeSet:
       id: good-2-seed-inventory
       author: bbqbookkeeper
@@ -352,7 +331,6 @@ databaseChangeLog:
                 ('Baby Back Ribs',20,'racks','Denver'),('Smoked Turkey',14,'lbs','Denver'),
                 ('Brisket',44,'lbs','Phoenix'),('Pulled Pork',24,'lbs','Phoenix'),
                 ('Jalapeño Sausage',38,'links','Phoenix'),('Chicken Wings',88,'pieces','Phoenix');
-
   - changeSet:
       id: good-3-bulk-inventory
       author: bbqbookkeeper
@@ -374,7 +352,6 @@ databaseChangeLog:
                        'Chicago','Dallas','Miami','Denver','Phoenix'])
                     [floor(random()*10+1)]
               FROM generate_series(1, 10000);
-
   - changeSet:
       id: good-4-seed-suppliers
       author: bbqbookkeeper
@@ -405,7 +382,6 @@ databaseChangeLog:
                 ('Miami Meats','Miami','Brisket',4),
                 ('Rocky Mountain Supply','Denver','Brisket',3),
                 ('Desert Supply Co','Phoenix','Jalapeño Sausage',2);
-
   - changeSet:
       id: good-5-bulk-suppliers
       author: bbqbookkeeper
@@ -429,7 +405,6 @@ databaseChangeLog:
                     [floor(random()*10+1)],
                 floor(random()*7+1)::int
               FROM generate_series(1, 10000);
-
   - changeSet:
       id: good-6-dedup-suppliers
       author: bbqbookkeeper
@@ -438,9 +413,43 @@ databaseChangeLog:
       comment: "Deduplicate suppliers — one row per location+item to prevent JOIN fanout"
       changes:
         - sql:
-            sql: |
+            sql: |-
               DELETE FROM suppliers
               WHERE id NOT IN (
                 SELECT MIN(id) FROM suppliers
                 GROUP BY location, item
               );
+  - changeSet:
+      id: add-idx-lower-location-suppliers
+      author: Animesh Pathak
+      comment: Create functional index on LOWER(location) for suppliers table to improve case-insensitive query performance as recommended by DBmarlin
+      labels: dbmarlin-recommendation
+      changes:
+        - createIndex:
+            indexName: idx_lower_location
+            tableName: suppliers
+            columns:
+              - column:
+                  name: LOWER(location)
+                  computed: true
+      rollback:
+        - dropIndex:
+            indexName: idx_lower_location
+            tableName: suppliers
+  - changeSet:
+      id: add-idx-lower-item-suppliers
+      author: Animesh Pathak
+      comment: Create functional index on LOWER(item) for suppliers table to improve case-insensitive query performance as recommended by DBmarlin
+      labels: dbmarlin-recommendation
+      changes:
+        - createIndex:
+            indexName: idx_lower_item
+            tableName: suppliers
+            columns:
+              - column:
+                  name: LOWER(item)
+                  computed: true
+      rollback:
+        - dropIndex:
+            indexName: idx_lower_item
+            tableName: suppliers
