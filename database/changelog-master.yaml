@@ -498,3 +498,33 @@ databaseChangeLog:
       rollback:
         - sql:
             sql: DROP INDEX IF EXISTS idx_suppliers_name_length_lead_days;
+  - changeSet:
+      id: create-idx-suppliers-location
+      author: Animesh Pathak
+      comment: Create standard B-tree functional index on LOWER(location) for case-insensitive queries
+      labels: "optimization,index"
+      preConditions:
+        - onFail: MARK_RAN
+        - tableExists:
+            tableName: suppliers
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_suppliers_location ON suppliers(LOWER(location));
+      rollback:
+        - sql:
+            sql: DROP INDEX IF EXISTS idx_suppliers_location;
+  - changeSet:
+      id: create-idx-suppliers-item
+      author: Animesh Pathak
+      comment: Create standard B-tree functional index on LOWER(item) for case-insensitive queries
+      labels: "optimization,index"
+      preConditions:
+        - onFail: MARK_RAN
+        - tableExists:
+            tableName: suppliers
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_suppliers_item ON suppliers(LOWER(item));
+      rollback:
+        - sql:
+            sql: DROP INDEX IF EXISTS idx_suppliers_item;
