@@ -453,3 +453,48 @@ databaseChangeLog:
         - dropIndex:
             indexName: idx_lower_item
             tableName: suppliers
+  - changeSet:
+      id: create-idx-suppliers-location-trgm
+      author: Animesh Pathak
+      comment: Create GIN trigram index on LOWER(location) for efficient LIKE substring matching
+      labels: "dbmarlin,optimization,index"
+      preConditions:
+        - onFail: MARK_RAN
+        - tableExists:
+            tableName: suppliers
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_suppliers_location_trgm ON suppliers USING GIN (LOWER(location) gin_trgm_ops);
+      rollback:
+        - sql:
+            sql: DROP INDEX IF EXISTS idx_suppliers_location_trgm;
+  - changeSet:
+      id: create-idx-suppliers-item-trgm
+      author: Animesh Pathak
+      comment: Create GIN trigram index on LOWER(item) for efficient LIKE substring matching
+      labels: "dbmarlin,optimization,index"
+      preConditions:
+        - onFail: MARK_RAN
+        - tableExists:
+            tableName: suppliers
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_suppliers_item_trgm ON suppliers USING GIN (LOWER(item) gin_trgm_ops);
+      rollback:
+        - sql:
+            sql: DROP INDEX IF EXISTS idx_suppliers_item_trgm;
+  - changeSet:
+      id: create-idx-suppliers-name-length-lead-days
+      author: Animesh Pathak
+      comment: Create functional index on LENGTH(name) DESC and lead_days DESC to optimize ORDER BY clause
+      labels: "dbmarlin,optimization,index"
+      preConditions:
+        - onFail: MARK_RAN
+        - tableExists:
+            tableName: suppliers
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_suppliers_name_length_lead_days ON suppliers (LENGTH(name) DESC, lead_days DESC);
+      rollback:
+        - sql:
+            sql: DROP INDEX IF EXISTS idx_suppliers_name_length_lead_days;
