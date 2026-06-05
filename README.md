@@ -292,3 +292,346 @@ kubectl rollout restart deployment/bbqbookeeper-web -n default
 - Stay on DBMarlin — watch average time drop as pods roll over
 - Show the `seed-good.sql` file — point out `CREATE INDEX ... ON inventory (LOWER(location))`
 - Use DBMarlin's Activity Comparison view to show before vs after side by side
+
+---
+
+## Harness Pipeline Flow
+
+The demo uses a Harness pipeline to orchestrate deployment and monitoring. Pipeline identifier: `DB_Marlin_Bad_Performance_FullStory`
+
+### Stage 1: Deploy DB and Application - Performance Issue
+
+Deploys the bad performance state to demonstrate issues.
+
+**Deploy DB Step Group:**
+- Apply Database Schema (Liquibase): bookkeeper schema on postgres instance, tag v1.0.2
+- Notify Changes to DBMarlin: POST event to DBMarlin API with execution URL
+
+**Deploy Application:** K8s rolling deployment of bad version
+
+**Verify the Deployment:** Load test verification (10m, MEDIUM sensitivity, baseline LAST)
+- Failure strategy: Manual intervention on verification failure
+
+**Rollback:** Automatic stage rollback on errors
+
+### Stage 2: Approval
+
+Manual gate requiring 1 approver to confirm performance issues before remediation (2-day timeout).
+
+### Stage 3: BBQBook Keeper - New Image
+
+Deploys the optimized version to demonstrate performance improvements.
+
+**Deploy DB Step Group:**
+- Apply New DB Schema (Liquibase): bookkeeper schema on goodinstance, tag v1.0.0
+- Notify Changes: Template-based DBMarlin notification
+
+**New Application Deployment:** K8s rolling deployment of good version
+
+**New Deployment Verification:** Load test (5m, HIGH sensitivity, baseline LAST)
+- Failure strategy: Manual intervention on verification failure
+
+**Rollback:** Automatic stage rollback on errors
+
+---
+
+## Demo Reset Flow
+
+To reset the demo and build a good baseline before showing performance degradation:
+
+### Reset Steps
+
+1. Update the Harness service YAML manifest reference from `k8s-deploy-bad.yml` to `k8s-deploy.yml`
+2. Run the pipeline to build a clean baseline in the CV service
+3. Revert the service YAML back to `k8s-deploy-bad.yml` before starting the demo
+
+### Why This Matters
+
+- CV service has good performance metrics as a reference point
+- Bad deployment can be compared against the good baseline
+- Each demo starts from the same known-good state
+- DBMarlin shows clear before/after performance degradation
+
+**Note:** Only the service manifest reference needs to change between `k8s-deploy.yml` (good) and `k8s-deploy-bad.yml` (bad). No code changes or image rebuilds required.
+
+---
+
+## End-to-End Demo Setup Guide
+
+This section provides a complete walkthrough from scratch to a working demo with Harness pipeline integration.
+
+### Prerequisites Checklist
+
+- [ ] Kubernetes cluster running and `kubectl` configured
+- [ ] Docker installed for building images
+- [ ] Harness account with pipeline access
+- [ ] DBMarlin instance running and accessible
+- [ ] Liquibase configured in Harness (for DB schema management)
+- [ ] Harness connectors configured:
+  - Docker registry connector
+  - Kubernetes cluster connector (GKE or equivalent)
+  - Harness image connector (for Liquibase images)
+
+### Step 1: Initial Infrastructure Setup
+
+**1.1 Deploy PostgreSQL Database**
+```bash
+# Navigate to project directory
+cd /path/to/Inventory
+
+# Deploy Postgres with PVC
+kubectl apply -f postgres.yaml
+
+# Wait for Postgres to be ready
+kubectl rollout status deployment/postgres-dbops -n default
+kubectl get pods -n default -l app=postgres-dbops
+```
+
+**1.2 Configure DBMarlin to Monitor the Database**
+- Point DBMarlin to your PostgreSQL endpoint: `postgres-dbops:5432`
+- Configure monitoring credentials (user/password from postgres.yaml)
+- Verify DBMarlin can connect and is collecting metrics
+
+### Step 2: Build and Push Application Images
+
+**2.1 Build both versions (bad and good)**
+```bash
+# Build bad version
+docker build --build-arg BUILD_VERSION=bad -t ghcr.io/sonichigo/bbqbookkeeper:bad .
+docker push ghcr.io/sonichigo/bbqbookkeeper:bad
+
+# Build good version
+docker build --build-arg BUILD_VERSION=good -t ghcr.io/sonichigo/bbqbookkeeper:good .
+docker push ghcr.io/sonichigo/bbqbookkeeper:good
+
+# Or use the build script
+./build-and-push.sh
+```
+
+**2.2 Update image references if using a different registry**
+```yaml
+# Edit k8s/k8s-deploy-bad.yaml and k8s/k8s-deploy-good.yaml
+# Update the image field to your registry path
+image: YOUR_REGISTRY/bbqbookkeeper:bad
+```
+
+### Step 3: Configure Harness Pipeline
+
+**3.1 Create Harness Services**
+
+Create two services in Harness (Project: DBMarlin):
+
+**Service 1: `deploy_app` (Bad version)**
+- Service type: Kubernetes
+- Manifest: Reference `k8s-deploy-bad.yml` from your repo
+- Artifact: Docker image `ghcr.io/sonichigo/bbqbookkeeper:bad`
+
+**Service 2: `deploy` (Good version)**
+- Service type: Kubernetes  
+- Manifest: Reference `k8s-deploy.yml` or `k8s-deploy-good.yml` from your repo
+- Artifact: Docker image `ghcr.io/sonichigo/bbqbookkeeper:good`
+
+**3.2 Create Harness Environment**
+
+- Environment name: `dsfd` (or your preferred name)
+- Environment type: Pre-Production or Production
+- Infrastructure definition: `DemoGKE` (or your K8s cluster)
+  - Connector: Your GKE/K8s connector
+  - Namespace: `default`
+
+**3.3 Configure Liquibase DB Instances**
+
+In Harness DB DevOps, create two database instances:
+
+**Instance 1: `postgres` (Bad schema)**
+- Database: `bookkeeper`
+- Context: `bad`
+- Schema version: `v1.0.2`
+- Configuration: No indexes, 50k rows
+
+**Instance 2: `goodinstance` (Good schema)**
+- Database: `bookkeeper`
+- Context: `good`
+- Schema version: `v1.0.0`
+- Configuration: With indexes, 10k rows
+
+**3.4 Create DBMarlin Notification Template**
+
+Create template `Notify_DBmarlin`:
+```bash
+curl -s -X POST \
+  -H 'Content-Type: application/json' \
+  -d "[{\"startDateTime\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"databaseTargetId\":2,\"eventTypeId\":5,\"title\":\"Execution of <+pipeline.name>\",\"detailsUrl\":\"<+pipeline.executionUrl>\"}]" \
+  http://YOUR_DBMARLIN_IP:9090/archiver/rest/v1/event \
+  -v -w 'Response time: %{time_total}s\n'
+```
+
+**3.5 Import the Pipeline**
+
+- Copy the pipeline YAML provided in this README (Harness Pipeline Flow section)
+- Import into Harness (Project: DBMarlin, Org: default)
+- Pipeline identifier: `DB_Marlin_Bad_Performance_FullStory`
+- Update the DBMarlin API endpoint in the "Notify Changes" step
+
+### Step 4: Reset Demo - Build Good Baseline
+
+Before running the actual demo, establish a clean baseline:
+
+**4.1 Update Service to Good Version**
+```yaml
+# In Harness service `deploy_app`, update manifest reference:
+# FROM: k8s-deploy-bad.yml
+# TO:   k8s-deploy.yml
+```
+
+**4.2 Run Baseline Pipeline**
+- Execute the Harness pipeline
+- This deploys the good version first
+- CV service records healthy performance metrics
+- DBMarlin captures baseline query patterns
+
+**4.3 Verify Baseline in DBMarlin**
+- Check average query time: 5-50ms
+- Query plan: Index scans
+- Connection pool: Healthy
+- Take note of these metrics as your baseline
+
+**4.4 Revert Service Back to Bad Version**
+```yaml
+# In Harness service `deploy_app`, change manifest back:
+# FROM: k8s-deploy.yml  
+# TO:   k8s-deploy-bad.yml
+```
+
+### Step 5: Run the Demo
+
+**5.1 Execute the Pipeline**
+- Go to Harness pipeline: `DB_Marlin_Bad_Performance_FullStory`
+- Click "Run Pipeline"
+- Stage 1 deploys the bad version with performance issues
+
+**5.2 Observe Stage 1: Performance Issue**
+- Monitor the pipeline execution
+- Watch DBMarlin metrics:
+  - Query time increases to 500-5000ms
+  - Sequential scans on 50k rows
+  - N+1 query pattern visible
+  - Connection pool exhaustion
+- CV verification step compares against baseline (MEDIUM sensitivity, 10m duration)
+- Explain to audience: "This is what happens with poor database design"
+
+**5.3 Stage 2: Manual Approval**
+- Review the performance degradation in DBMarlin
+- Show the Activity Comparison view (baseline vs bad)
+- Point out specific issues:
+  - No indexes on `LOWER()` columns
+  - 50k rows loaded per query
+  - N+1 query pattern
+- Approve the pipeline to proceed to remediation
+
+**5.4 Stage 3: Deploy Fix**
+- Pipeline automatically deploys good version
+- Watch DBMarlin metrics improve in real-time:
+  - Query time drops to 5-50ms
+  - Index scans replace sequential scans
+  - Single JOIN replaces N+1 queries
+  - Connection pool healthy
+- CV verification step confirms improvement (HIGH sensitivity, 5m duration)
+
+**5.5 Final Comparison**
+- Show DBMarlin Activity Comparison:
+  - Before: Sequential scan, 500-5000ms
+  - After: Index scan, 5-50ms
+  - 100-1000x performance improvement
+- Highlight the schema changes in Liquibase (added indexes)
+- Show the application code changes (N+1 to JOIN)
+
+### Step 6: Teardown (Optional)
+
+```bash
+# Delete application deployments
+kubectl delete -f k8s/k8s-deploy-bad.yaml
+kubectl delete -f k8s/k8s-deploy-good.yaml
+
+# Delete database (WARNING: loses all data)
+kubectl delete -f postgres.yaml
+```
+
+---
+
+## Troubleshooting
+
+### Pipeline Fails at DB Schema Apply
+
+**Issue:** Liquibase step fails with "schema not found"
+
+**Solution:**
+- Check DB instance configuration in Harness
+- Verify database name is `bookkeeper`
+- Ensure Postgres is running: `kubectl get pods -l app=postgres-dbops`
+
+### DBMarlin Not Receiving Events
+
+**Issue:** Notification step succeeds but events don't appear in DBMarlin
+
+**Solution:**
+- Verify DBMarlin endpoint is accessible from K8s cluster
+- Check databaseTargetId matches your DBMarlin configuration
+- Confirm eventTypeId=5 exists in your DBMarlin instance
+
+### CV Verification Fails
+
+**Issue:** Verification step fails immediately or times out
+
+**Solution:**
+- Ensure baseline exists (run reset flow first)
+- Check monitored service is configured correctly
+- Verify metrics are flowing from K8s to CV
+- Review sensitivity setting (MEDIUM/HIGH)
+
+### Application Pods Not Starting
+
+**Issue:** Pods in CrashLoopBackOff or ImagePullBackOff
+
+**Solution:**
+- Check image exists in registry: `docker pull ghcr.io/sonichigo/bbqbookkeeper:bad`
+- Verify image pull secrets if using private registry
+- Check logs: `kubectl logs -l app=bbqbookkeeper`
+- Ensure Postgres is reachable: `kubectl exec -it <pod> -- ping postgres-dbops`
+
+### Load Generator Not Creating Load
+
+**Issue:** No queries visible in DBMarlin
+
+**Solution:**
+- Check sidecar container is running: `kubectl get pods -o jsonpath='{.items[*].spec.containers[*].name}'`
+- Verify load generator container logs: `kubectl logs <pod> -c load-generator`
+- Confirm app is responding: `kubectl exec -it <pod> -- curl localhost:8080/health`
+
+---
+
+## Quick Reference
+
+### Important Files
+- `postgres.yaml` - PostgreSQL deployment
+- `k8s/k8s-deploy-bad.yaml` - Bad version K8s manifest
+- `k8s/k8s-deploy-good.yaml` - Good version K8s manifest  
+- `k8s/k8s-deploy.yaml` - Generic manifest (for baseline)
+- Liquibase changelogs with `--contexts=bad` and `--contexts=good`
+
+### Key Metrics to Watch in DBMarlin
+- Average query time: 500-5000ms (bad) → 5-50ms (good)
+- Query plan: Sequential scan (bad) → Index scan (good)
+- Queries per minute: 10,000+ (bad) → 100-200 (good)
+- Connection pool: Exhausted (bad) → Healthy (good)
+
+### Pipeline Stages at a Glance
+1. **Deploy Bad + Verify** → Shows the problem
+2. **Manual Approval** → Time to analyze issues
+3. **Deploy Good + Verify** → Shows the fix
+
+### Reset Before Each Demo
+1. Service YAML: `k8s-deploy-bad.yml` → `k8s-deploy.yml`
+2. Run pipeline once
+3. Service YAML: `k8s-deploy.yml` → `k8s-deploy-bad.yml`
+4. Ready to demo
