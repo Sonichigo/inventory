@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bbqbookeeper-web-canary
+  namespace: default
+  labels: { app: bbqinventoryapp, version: canary }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: bbqinventoryapp, version: canary }
+  template:
+    metadata:
+      labels: { app: bbqinventoryapp, version: canary }
+    spec:
+      containers:
+        - name: bbqinventoryapp
+          image: ghcr.io/sonichigo/bbqbookkeeper:IMAGE_TAG
+          imagePullPolicy: Always
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: DB_SERVER, value: "postgres-dbops" }
+            - { name: DB_INIT_USER, valueFrom: { secretKeyRef: { name: bbq-db-secret, key: db-init-user } } }
+            - { name: DB_INIT_PASS, valueFrom: { secretKeyRef: { name: bbq-db-secret, key: db-init-pass } } }
+            - { name: DB_USER, valueFrom: { secretKeyRef: { name: bbq-db-secret, key: db-user } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: bbq-db-secret, key: db-password } } }
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, initialDelaySeconds: 5, periodSeconds: 3 }
+          livenessProbe:  { httpGet: { path: /health, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 5 }
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "200m", memory: "512Mi" }
